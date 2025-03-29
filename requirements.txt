@@ -1,6 +1,6 @@
+ollama
+playsound
+torch==2.5.0
 TTS
 SpeechRecognition
-PyAudio
-#also needs to install 
-sudo apt install portaudio19-dev
-
+pyaudio

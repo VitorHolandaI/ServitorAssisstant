@@ -34,8 +34,8 @@ def tts(talk,model_name,output_path):
         print(f"Error running TTS: {e}")
 
 
-    playsound('./robot_voice.wav')
-    os.remove('./audio.wav')
+    playsound('robot_voice.wav')
+    os.remove('audio.wav')
     print("now exiting")
 
 
@@ -49,6 +49,7 @@ def stt():
             phrase = r.recognize_google(audio)
             print("Google Speech Recognition thinks you said " + phrase)
             if ("Migos" in phrase or "migos" in phrase):
+                phrase = phrase.replace('Migos', '')
                 result = ollama_talker(phrase)
                 model_name="tts_models/multilingual/multi-dataset/xtts_v2",
                 tts(result,model_name,"./audio.wav")
@@ -68,8 +69,8 @@ def ollama_talker(phrase):
             host='http://192.168.0.12:11434',
             headers={'x-some-header': 'some-value'}
 )
-    system_prompt = "You are now a warhammer 40k MAGOs, use the same persolnality as one showing curiosity for cience in all manners ,also only need short reponses"
-    response = client.chat('deepseek-r1:14b', 
+    system_prompt = "You are now a warhammer 40k MAGOs, use the same persolnality as one showing curiosity for cience in all manners ,also only need short reponses, you are like a magos from a library from teh imperium and answeer all questioes "
+    response = client.chat('llama3.2:3b', 
                 messages=[
                     {'role': 'system', 'content': system_prompt},
                     {'role': 'user', 'content': phrase}
