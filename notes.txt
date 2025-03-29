@@ -1,2 +1,3 @@
 better to send microphone input over the network to be processed on the local machine running the models with gpu etc etc.
 prob use gstreamer, Realtime STT is a very good option to change from google stt
+DeepSpeech examples may be a good option as well
