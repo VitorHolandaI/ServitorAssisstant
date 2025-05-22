@@ -3,7 +3,7 @@ import io
 import socket
 import requests
 import speech_recognition as sr
-#import RPi.GPIO as GPIO
+# import RPi.GPIO as GPIO
 import time
 import io
 import os
@@ -28,19 +28,19 @@ class Servitor:
         """
         Sets led pwm to low light
         """
-        #self.pwm.start(10)
+        # self.pwm.start(10)
 
     def led_off(self):
         """
         Sets led pwm to low light
         """
-        #self.pwm.start(0)
+        # self.pwm.start(0)
 
     def led_on_high(self):
         """
         Sets led pwm to High light
         """
-        #self.pwm.start(100)
+        # self.pwm.start(100)
 
     def set_led_pin(self, pin):
         """
@@ -71,14 +71,42 @@ class Servitor:
                 while data:
                     sock.send(data)
                     data = fi.read(4096)
+                print("All sent")
                 fi.close()
         except IOError:
             print('You entered an invalid filename! Please enter a valid name')
         print(f'Successfully sent {filename}')
+        sock.close()
+
+        self.receive_audio_and_play()
+
+    def receive_audio_and_play(self):
+        host = '0.0.0.0'
+        port = 8080
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind((host, port))
+        sock.listen(1)
+
+        connex = sock.accept()
+        print("Receiving audio file to play")
+        data = b''
+        while True:
+            packet = connex[0].recv(4096)
+            if not packet:
+                break
+            data += packet
+
+        audio_file = f'audio1.wav'
+
+        with open(audio_file, 'wb') as fi_o:
+            fi_o.write(data)
+        connex[0].close()
+        sock.close()
+        self.play_audio()
 
     def play_audio(self):
         try:
-            command = 'sox audio.wav robot_voice.wav' + \
+            command = 'sox audio1.wav robot_voice.wav' + \
                 ' overdrive 50 gain -n -10.0 gain -3.0 reverb 50 30 60 10 0 0'
             subprocess.Popen(command, shell=True, executable="/bin/bash")
             print("Convert worked")
@@ -109,7 +137,7 @@ class Servitor:
             self.process_audio(wav_data)
 
 
-servitorUno = Servitor("Servitor1", "192.168.0.7")
+servitorUno = Servitor("Servitor1", "192.168.0.9")
 servitorUno.set_led_pin(12)
 servitorUno.listen(sr)
 
