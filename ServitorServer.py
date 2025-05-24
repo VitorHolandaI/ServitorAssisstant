@@ -10,10 +10,21 @@ import torch
 class ServitorServer:
 
     def __init__(self, name, client_ip):
+        """
+        Initializer function takes the name and the ip adress
+        from the client that plays the audios
+        :param name str: the name of the servitor
+        :param client_ip str: ip adress of the client
+        """
         self.name = name
         self.client_ip = client_ip
 
     def process_ollama(self, talk: str):
+        """
+        This function right now talks to the local ollama.
+
+        :param talk: a string with query of the user.
+        """
         print(f"this was the phrase {talk}")
         client = Client(
             host='http://127.0.0.1:11434',
@@ -35,6 +46,13 @@ class ServitorServer:
         return responseString
 
     def process_audio(self):
+        """
+        Audio to process the audio,it reads the send file from the client
+        then tries to recognize it by using for now, vosk local api
+        prob going to change for whisper from openai?, and later
+        asks the user query for the llm that responds a text, and this
+        text will be transformed back to audio.
+        """
 
         print("Process audio func")
         AUDIO_FILE = "audio.wav"  # or .flac, .aiff, etc.
@@ -68,6 +86,12 @@ class ServitorServer:
         return 0
 
     def send_audio(self):
+        """
+        Funcion to send the processed audio over the client that will play it
+        opens a socker connection to the client and port 8080, and then closes
+        the conection.
+
+        """
         client_ip = self.client_ip
         host = client_ip
         port = 8080
@@ -88,7 +112,11 @@ class ServitorServer:
         print(f'Successfully sent {filename}')
 
     def receive_audio(self):
-        host = self.client_ip
+        """
+        Function to receive the first audio file to identify the user query.
+        keps listening on port 8080 receive write it out then closes the socket
+        """
+        host = "0.0.0.0"
         port = 8080
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.bind((host, port))

@@ -53,6 +53,11 @@ class ServitorClient:
 #        self.pwm = GPIO.PWM(pin, 1000)
 
     def process_audio(self, audio):
+        """
+        function to call process audio functions
+
+        :param audio str: the audio name file
+        """
         audio_name = 'audio.wav'
         with open(audio_name, 'wb') as f:
             f.write(audio)
@@ -60,6 +65,14 @@ class ServitorClient:
         self.send_audio()
 
     def send_audio(self):
+        """
+        Function to send and audio file to the remote or local server..
+        This function creates a socket connection to the server to use port 8080
+        and connect it will send the audio file .wav to the server to be
+        processed there.
+        For documenting: the file is read and send over as a binary file,
+        a block size of 4096 after sending it it closes the connection.
+        """
         host = self.server
         port = 8080
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -80,6 +93,12 @@ class ServitorClient:
         sock.close()
 
     def receive_audio(self):
+        """
+        This function receives a audio file back after sending it to processing it
+        on the remote server, this creates a socket listening on all interfaces and on
+        port 8080 will receve the file and write it as audio1 that later will be used
+        to be transformed and played
+        """
         host = '0.0.0.0'
         port = 8080
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -104,6 +123,9 @@ class ServitorClient:
         # self.play_audio()
 
     def play_audio(self):
+        """
+        Function to play the specific audio file.
+        """
         try:
             command = 'sox audio1.wav robot_voice.wav' + \
                 ' overdrive 50 gain -n -10.0 gain -3.0 reverb 50 30 60 10 0 0'
@@ -115,18 +137,13 @@ class ServitorClient:
         playsound('robot_voice.wav')
         os.remove('audio.wav')
 
-    def receive_file(self, file_name, client_socket):
-        with open(file_name, 'wb') as file:
-            while True:
-                data = client_socket.recv(4096)
-                if not data:
-                    break
-                file.write(data)
-
-        print(f"File '{file_name}' received successfully.")
-    # client_socket.close()
-
     def listen(self, sr):
+        """
+        Function for the agent to lister to the audio input
+        from the microphone
+
+        :param sr speech_recognition module: used to listen to the microphone
+        """
         with sr.Microphone() as source:
             print("Speak !")
             self.led_on_low()
