@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-import io
 import socket
-import requests
 import speech_recognition as sr
 # import RPi.GPIO as GPIO
 import time
-import io
 import os
 from playsound import playsound
 import subprocess
-import speech_recognition as sr
-import socket
 
 
-class Servitor:
+class ServitorClient:
     recognizer = None
     name = "default-name"
     server: str = "ip"
 #    pwm: GPIO.PWM = None
 
     def __init__(self, name, server_ip):
+        """
+        Constructor function initializing the Servitor Client class
+
+        :param name str: the name of the client
+        :param server_ip str: the servitor server that hosts the llms etc
+        """
         self.name = name
         self.server = server_ip
         self.recognizer = sr.Recognizer()
@@ -78,9 +79,7 @@ class Servitor:
         print(f'Successfully sent {filename}')
         sock.close()
 
-        self.receive_audio_and_play()
-
-    def receive_audio_and_play(self):
+    def receive_audio(self):
         host = '0.0.0.0'
         port = 8080
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -102,7 +101,7 @@ class Servitor:
             fi_o.write(data)
         connex[0].close()
         sock.close()
-        self.play_audio()
+        # self.play_audio()
 
     def play_audio(self):
         try:
@@ -137,7 +136,11 @@ class Servitor:
             self.process_audio(wav_data)
 
 
-servitorUno = Servitor("Servitor1", "192.168.0.9")
-servitorUno.set_led_pin(12)
-servitorUno.listen(sr)
+while True:
+    servitorUno = ServitorClient("Servitor1", "192.168.0.9")
+    servitorUno.set_led_pin(12)
+    servitorUno.listen(sr)
+    servitorUno.receive_audio()
+    servitorUno.play_audio()
+    time.sleep(1)
 
