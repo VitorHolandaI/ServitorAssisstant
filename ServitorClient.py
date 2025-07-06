@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import socket
 import speech_recognition as sr
-# import RPi.GPIO as GPIO
+import RPi.GPIO as GPIO
 import time
 import os
-from playsound import playsound
+from playsound3 import playsound
 import subprocess
 
 
@@ -12,9 +12,9 @@ class ServitorClient:
     recognizer = None
     name = "default-name"
     server: str = "ip"
-#    pwm: GPIO.PWM = None
+    pwm: GPIO.PWM = None
 
-    def __init__(self, name, server_ip):
+    def __init__(self, name, server_ip,gpio_number):
         """
         Constructor function initializing the Servitor Client class
 
@@ -24,33 +24,36 @@ class ServitorClient:
         self.name = name
         self.server = server_ip
         self.recognizer = sr.Recognizer()
+        self.set_led_pin(gpio_number)
 
     def led_on_low(self):
         """
         Sets led pwm to low light
         """
-        # self.pwm.start(10)
+        self.pwm.start(10)
 
     def led_off(self):
         """
         Sets led pwm to low light
         """
-        # self.pwm.start(0)
+        self.pwm.start(0)
 
     def led_on_high(self):
         """
         Sets led pwm to High light
         """
-        # self.pwm.start(100)
-
+        self.pwm.start(100)
     def set_led_pin(self, pin):
         """
         Set led pin mode and creates the pwm.
         to be used.
         """
-#        GPIO.setmode(GPIO.BCM)
-#        GPIO.setup(pin, GPIO.OUT)
-#        self.pwm = GPIO.PWM(pin, 1000)
+        if self.pwm is None:
+            print("ITS NONE")
+            GPIO.cleanup()          
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(pin, GPIO.OUT)
+            self.pwm = GPIO.PWM(pin, 1000)
 
     def process_audio(self, audio):
         """
@@ -73,11 +76,22 @@ class ServitorClient:
         For documenting: the file is read and send over as a binary file,
         a block size of 4096 after sending it it closes the connection.
         """
-        host = self.server
-        port = 8080
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((host, port))
-        filename = 'audio.wav'
+        try:
+            host = self.server
+            port = 8080
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((host, port))
+            filename = 'audio.wav'
+
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            start_fuc()
+
+#        host = self.server
+#        port = 8080
+#        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#        sock.connect((host, port))
+#        filename = 'audio.wav'
 
         try:
             with open(filename, 'rb') as fi:  # Open the file in binary mode
@@ -89,6 +103,7 @@ class ServitorClient:
                 fi.close()
         except IOError:
             print('You entered an invalid filename! Please enter a valid name')
+
         print(f'Successfully sent {filename}')
         sock.close()
 
@@ -153,11 +168,15 @@ class ServitorClient:
             self.process_audio(wav_data)
 
 
-while True:
-    servitorUno = ServitorClient("Servitor1", "192.168.0.9")
-    servitorUno.set_led_pin(12)
-    servitorUno.listen(sr)
-    servitorUno.receive_audio()
-    servitorUno.play_audio()
-    time.sleep(1)
+servitorUno = ServitorClient("Servitor1", "192.168.0.17",12)
+def start_fuc():
+    print("on func")
+    while True:
+        servitorUno.listen(sr)
+        print("on func2")
+        servitorUno.receive_audio()
+        servitorUno.play_audio()
+        time.sleep(1)
+
+start_fuc()
 
