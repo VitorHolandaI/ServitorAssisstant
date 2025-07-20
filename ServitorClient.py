@@ -14,7 +14,7 @@ class ServitorClient:
     server: str = "ip"
     pwm: GPIO.PWM = None
 
-    def __init__(self, name, server_ip,gpio_number):
+    def __init__(self, name, server_ip, gpio_number):
         """
         Constructor function initializing the Servitor Client class
 
@@ -43,6 +43,7 @@ class ServitorClient:
         Sets led pwm to High light
         """
         self.pwm.start(100)
+
     def set_led_pin(self, pin):
         """
         Set led pin mode and creates the pwm.
@@ -50,7 +51,7 @@ class ServitorClient:
         """
         if self.pwm is None:
             print("ITS NONE")
-            GPIO.cleanup()          
+            GPIO.cleanup()
             GPIO.setmode(GPIO.BCM)
             GPIO.setup(pin, GPIO.OUT)
             self.pwm = GPIO.PWM(pin, 1000)
@@ -168,15 +169,19 @@ class ServitorClient:
             self.process_audio(wav_data)
 
 
-servitorUno = ServitorClient("Servitor1", "192.168.0.17",12)
+servitor_uno = ServitorClient("Servitor1", "192.168.0.17", 12)
+
+
 def start_fuc():
+    """Start function."""
     print("on func")
     while True:
-        servitorUno.listen(sr)
+        servitor_uno.listen(sr)
         print("on func2")
-        servitorUno.receive_audio()
-        servitorUno.play_audio()
+        servitor_uno.receive_audio()
+        servitor_uno.play_audio()
         time.sleep(1)
+
 
 start_fuc()
 

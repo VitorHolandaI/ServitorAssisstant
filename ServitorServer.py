@@ -1,13 +1,17 @@
-import socket
-import time
-import speech_recognition as sr
-from TTS.api import TTS
 import re
+import time
+import socket
+import pyttsx3
 from ollama import Client
-import torch
+import speech_recognition as sr
 
 
 class ServitorServer:
+    """
+    Class Fot the servitor server responsible for calling the llm and processing audio, that is geting what.
+    the user said passing that back to the llm getting the response generating audio with that response
+    and sending it back.
+    """
 
     def __init__(self, name, client_ip):
         """
@@ -73,15 +77,10 @@ class ServitorServer:
         talk = self.process_ollama(talk)
 
         print("Now in tts")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
-
-        tts.tts_to_file(
-            text=talk,
-            speaker="Craig Gutsy",
-            language="en",
-            file_path="./audio2.wav"
-        )
+        syntesis_engine_audio = pyttsx3.init()
+        syntesis_engine_audio.setProperty('rate', 120)
+        syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
+        syntesis_engine_audio.runAndWait()
 
         return 0
 
