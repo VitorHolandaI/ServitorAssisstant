@@ -1,4 +1,5 @@
 import re
+import requests
 import time
 import socket
 import pyttsx3
@@ -49,9 +50,10 @@ class ServitorServer:
                                 response.message.content, flags=re.DOTALL)
         return responseString
 
-    def process_audio(self):
+    def process_audio(self, audio_file):
         """
-        Audio to process the audio,it reads the send file from the client
+        Audio to process the audio,it reads the send file from the client.
+
         then tries to recognize it by using for now, vosk local api
         prob going to change for whisper from openai?, and later
         asks the user query for the llm that responds a text, and this
@@ -59,10 +61,9 @@ class ServitorServer:
         """
 
         print("Process audio func")
-        AUDIO_FILE = "audio.wav"  # or .flac, .aiff, etc.
         r = sr.Recognizer()
 
-        with sr.AudioFile(AUDIO_FILE) as source:
+        with sr.AudioFile(audio_file) as source:
             audio = r.record(source)
 
         try:
@@ -82,64 +83,29 @@ class ServitorServer:
         syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
         syntesis_engine_audio.runAndWait()
 
+
         return 0
 
-    def send_audio(self):
+    def send_audio_recorded(self):
         """
-        Funcion to send the processed audio over the client that will play it
-        opens a socker connection to the client and port 8080, and then closes
-        the conection.
 
         """
-        client_ip = self.client_ip
-        host = client_ip
-        port = 8080
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((host, port))
-        filename = 'audio2.wav'
-        try:
-            with open(filename, 'rb') as fi:  # Open the file in binary mode
-                data = fi.read(4096)  # Read data in chunks of 4KB
-                while data:
-                    sock.send(data)
-                    data = fi.read(4096)
-                fi.close()
-        except IOError:
-            print('You entered an invalid filename! Please enter a valid name')
+        url = f"http://{self.client_ip}:8000/file_recorded"
+        files = {'my_file': open('audio2.wav', 'rb')}
+        res = requests.post(url, files=files)
+        print(res)
 
-        sock.close()
-        print(f'Successfully sent {filename}')
-
-    def receive_audio(self):
+    def send_audio_normal(self, audio_file):
         """
-        Function to receive the first audio file to identify the user query.
-        keps listening on port 8080 receive write it out then closes the socket
+
         """
-        host = "0.0.0.0"
-        port = 8080
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.bind((host, port))
-        sock.listen(1)
+        url = f"http://{self.client_ip}:8000/file_recorded"
+        files = {'my_file': open('audio3.wav', 'rb')}
+        res = requests.post(url, files=files)
+        print(res)
 
-        connex = sock.accept()
-        print("Established conn")
 
-        data = b''  # data is binary so anythign can be received if its in binary data raw that its
-
-        while True:
-            # keep reading the data ntil it ends...
-            packet = connex[0].recv(4096)
-            if not packet:
-                break
-            data += packet
-
-        audio_file = f'audio.wav'
-
-        with open(audio_file, 'wb') as fi_o:
-            fi_o.write(data)
-        connex[0].close()
-        sock.close()
-        print("Wrote audio clossing socket")
+        # send file as server is doing other things
 
 
 servitorServer = ServitorServer("Serveruno", "192.168.0.11")

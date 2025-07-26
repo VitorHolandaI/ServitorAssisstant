@@ -1,3 +1,5 @@
 *.vim
 *.wav
 env/
+en/
+__pycache__/
