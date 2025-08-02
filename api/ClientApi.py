@@ -14,6 +14,10 @@ Servitor = ServitorClient("ServitorClient", "192.168.0.17", 12)
 async def create_upload_file(my_file: UploadFile):
     print(my_file.filename)
     file = my_file.file
+    print(f"tipo do arquivo {type(file)}")
+    
+    file =  file.read()
+
     Servitor.process_audio(file)#escreve como audio.wav
     Servitor.play_audio() #pega o audio original e modifica com sox e da play
     return {"filename": my_file}
