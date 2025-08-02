@@ -67,8 +67,6 @@ class ServitorClient:
         with open(audio_name, 'wb') as f:
             f.write(audio)
 
- 
-
     def send_audio(self):
         """
         Function to send and audio file to the remote or local server..
@@ -112,20 +110,3 @@ class ServitorClient:
             wav_data = audio.get_wav_data()
             self.led_off()
             self.process_audio(wav_data)
-
-
-
-
-#def start_fuc():
-#    """Start function."""
-#    print("on func")
-#    while True:
-#        servitor_uno.listen(sr)
-#        print("on func2")
-#        servitor_uno.receive_audio()
-#        servitor_uno.play_audio()
-#        time.sleep(1)
-#
-#
-start_fuc()
-
