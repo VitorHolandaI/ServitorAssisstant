@@ -4,3 +4,4 @@ torch==2.5.0
 TTS
 SpeechRecognition
 pyaudio
+fastapi
