@@ -67,6 +67,16 @@ class ServitorClient:
         with open(audio_name, 'wb') as f:
             f.write(audio)
 
+    def process_audio2(self, audio):
+        """
+        function to call process audio functions
+
+        :param audio str: the audio name file
+        """
+        audio_name = 'audio2.wav'
+        with open(audio_name, 'wb') as f:
+            f.write(audio)
+
     def send_audio(self):
         """
         Function to send and audio file to the remote or local server..
@@ -103,10 +113,14 @@ class ServitorClient:
 
         :param sr speech_recognition module: used to listen to the microphone
         """
-        with sr.Microphone() as source:
-            print("Speak !")
-            self.led_on_low()
-            audio = self.recognizer.listen(source, phrase_time_limit=10)
-            wav_data = audio.get_wav_data()
-            self.led_off()
-            self.process_audio(wav_data)
+        while True:
+            with sr.Microphone() as source:
+                print("Speak !")
+                self.led_on_low()
+                audio = self.recognizer.listen(source, phrase_time_limit=10)
+                wav_data = audio.get_wav_data()
+                self.led_off()
+                self.process_audio2(wav_data)
+                self.send_audio()
+                time.sleep(10)
+
