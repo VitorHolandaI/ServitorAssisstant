@@ -1,6 +1,5 @@
 from fastapi import FastAPI, UploadFile
-from ServitorServer import *
-import speech_recognition as sr
+from ServitorServer import ServitorServer
 
 import uvicorn
 app = FastAPI()
