@@ -9,7 +9,7 @@ import uvicorn
 app = FastAPI()
 
 
-Servitor = ServitorClient("ServitorClient", "192.168.0.17", 12)
+Servitor = ServitorClient("ServitorClient", "192.168.0.14", 12)
 
 
 def listen_to_microphone():

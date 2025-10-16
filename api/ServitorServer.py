@@ -90,7 +90,7 @@ class ServitorServer:
         """
 
         """
-        url = f"http://{self.client_ip}:8000/file_recorded"
+        url = f"http://{self.client_ip}:8000/play_file"
         files = {'my_file': open('audio2.wav', 'rb')}
         res = requests.post(url, files=files)
         print(res)
@@ -106,13 +106,3 @@ class ServitorServer:
 
 
         # send file as server is doing other things
-
-
-servitorServer = ServitorServer("Serveruno", "192.168.0.11")
-
-
-while True:
-    servitorServer.receive_audio()
-    servitorServer.process_audio()
-    servitorServer.send_audio()
-    time.sleep(1)
