@@ -5,3 +5,7 @@ TTS
 SpeechRecognition
 pyaudio
 fastapi
+pyttsx3
+fastapi
+wheel
+vosk

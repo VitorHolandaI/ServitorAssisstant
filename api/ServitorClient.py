@@ -76,7 +76,6 @@ class ServitorClient:
         audio_name = 'audio2.wav'
         with open(audio_name, 'wb') as f:
             f.write(audio)
-
     def send_audio(self):
         """
         Function to send and audio file to the remote or local server..
@@ -106,7 +105,7 @@ class ServitorClient:
         playsound('robot_voice.wav')
         os.remove('audio.wav')
 
-    def listen(self, sr):
+    def listen(self):
         """
         Function for the agent to lister to the audio input
         from the microphone
@@ -114,13 +113,16 @@ class ServitorClient:
         :param sr speech_recognition module: used to listen to the microphone
         """
         while True:
-            with sr.Microphone() as source:
+            with sr.Microphone(device_index=2) as source:
                 print("Speak !")
                 self.led_on_low()
                 audio = self.recognizer.listen(source, phrase_time_limit=10)
+                print("Speak2!")
                 wav_data = audio.get_wav_data()
+                print("Speak3!")
                 self.led_off()
                 self.process_audio2(wav_data)
+                print("Speak4!")
                 self.send_audio()
+                print("Speak5!")
                 time.sleep(10)
-
