@@ -1,6 +1,6 @@
 ollama
 playsound3
-torch==2.5.0
+torch==2.8.0
 TTS
 SpeechRecognition
 pyaudio
