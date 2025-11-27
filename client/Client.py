@@ -132,7 +132,7 @@ class ServitorClient:
         a block size of 4096 after sending it it closes the connection.
         """
         url = f"http://{self.server}:8000/file_recorded"
-        byte_file = BytesIO(audio_bytes)
+        byte_file = BytesIO(audio_bytes) #kinda transforming back to Bytes io here
 
         files = {'my_file': byte_file}
 
