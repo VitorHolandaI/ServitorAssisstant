@@ -79,7 +79,6 @@ class ServitorClient:
         audio_name = 'audio2.wav'
         with open(audio_name, 'wb') as f:
             f.write(audio)
-
     def send_audio(self):
         """
         Function to send and audio file to the remote or local server..

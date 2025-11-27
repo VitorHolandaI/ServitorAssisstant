@@ -1,6 +1,5 @@
 from fastapi import FastAPI, UploadFile
 from client import ServitorClient
-# import speech_recognition as sr
 import threading
 import uvicorn
 
