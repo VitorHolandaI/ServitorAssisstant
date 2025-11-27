@@ -7,6 +7,7 @@ import time
 import os
 from playsound3 import playsound
 import subprocess
+from io import BytesIO
 
 
 class ServitorClient:
@@ -57,7 +58,9 @@ class ServitorClient:
             GPIO.setup(pin, GPIO.OUT)
             self.pwm = GPIO.PWM(pin, 1000)
 
+
     def process_audio(self, audio):
+        #fazer lazy loading do processamento etc para dps dar play
         """
         function to call process audio functions
 
@@ -90,6 +93,23 @@ class ServitorClient:
         res = requests.post(url, files=files)
         print(res)
 
+    def send_audio_bytes(self, audio_bytes):
+        """
+        Function to send and audio file to the remote or local server..
+        This function creates a socket connection to the server to use port 8080
+        and connect it will send the audio file .wav to the server to be
+        processed there.
+        For documenting: the file is read and send over as a binary file,
+        a block size of 4096 after sending it it closes the connection.
+        """
+        url = f"http://{self.server}:8000/file_recorded"
+        byte_file = BytesIO(audio_bytes)
+
+        files = {'my_file': byte_file}
+
+        res = requests.post(url, files=files)
+        print(res)
+
     def play_audio(self):
         """
         Function to play the specific audio file.
@@ -114,15 +134,16 @@ class ServitorClient:
         """
         while True:
             with sr.Microphone(device_index=2) as source:
-                print("Speak !")
+                print("Adjusting To noise")
+                self.recognizer.adjust_for_ambient_noise(source)
                 self.led_on_low()
                 audio = self.recognizer.listen(source, phrase_time_limit=10)
                 print("Speak2!")
                 wav_data = audio.get_wav_data()
                 print("Speak3!")
                 self.led_off()
-                self.process_audio2(wav_data)
+                # its aredy bytes mf self.process_audio2(wav_data)
                 print("Speak4!")
-                self.send_audio()
+                self.send_audio_bytes(wav_data)
                 print("Speak5!")
                 time.sleep(10)
