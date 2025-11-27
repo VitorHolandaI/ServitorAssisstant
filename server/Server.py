@@ -1,4 +1,5 @@
 import re
+from io import BytesIO
 import requests
 import time
 import socket
@@ -78,6 +79,8 @@ class ServitorServer:
         talk = self.process_ollama(talk)
 
         print("Now in tts")
+
+
         syntesis_engine_audio = pyttsx3.init()
         syntesis_engine_audio.setProperty('rate', 120)
         syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
@@ -85,6 +88,23 @@ class ServitorServer:
 
         return 0
 
+    def send_audio_bytes(self, audio_bytes):
+        """
+        Function to send and audio file to the remote or local server..
+        This function creates a socket connection to the server to use port 8080
+        and connect it will send the audio file .wav to the server to be
+        processed there.
+        For documenting: the file is read and send over as a binary file,
+        a block size of 4096 after sending it it closes the connection.
+        """
+        url = f"http://{self.client_ip}:8000/play_file"
+        byte_file = BytesIO(audio_bytes)
+
+        files = {'my_file': byte_file}
+
+        res = requests.post(url, files=files)
+
+        print(res)
     def send_audio_recorded(self):
         """
 
