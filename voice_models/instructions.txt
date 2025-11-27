@@ -1,0 +1,1 @@
+to download a voice model : python3 -m piper.download_voices en_US-ryan-medium
