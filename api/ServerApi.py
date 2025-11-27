@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile
 from ServitorServer import ServitorServer
+from  server import ServitorServer
 
 import uvicorn
 app = FastAPI()

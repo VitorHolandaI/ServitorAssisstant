@@ -58,7 +58,9 @@ class ServitorClient:
             GPIO.setup(pin, GPIO.OUT)
             self.pwm = GPIO.PWM(pin, 1000)
 
+
     def process_audio(self, audio):
+        #fazer lazy loading do processamento etc para dps dar play
         """
         function to call process audio functions
 
