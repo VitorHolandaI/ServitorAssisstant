@@ -83,7 +83,6 @@ class ServitorServer:
         syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
         syntesis_engine_audio.runAndWait()
 
-
         return 0
 
     def send_audio_recorded(self):
@@ -103,6 +102,5 @@ class ServitorServer:
         files = {'my_file': open('audio3.wav', 'rb')}
         res = requests.post(url, files=files)
         print(res)
-
 
         # send file as server is doing other things

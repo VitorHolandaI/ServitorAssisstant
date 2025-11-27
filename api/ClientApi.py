@@ -1,19 +1,21 @@
 from fastapi import FastAPI, UploadFile
-from ServitorClient import *
-#import speech_recognition as sr
-import time
+from client import ServitorClient
+# import speech_recognition as sr
 import threading
-
-
 import uvicorn
+
+
+
+
+
+
 app = FastAPI()
-
-
 Servitor = ServitorClient("ServitorClient", "192.168.0.14", 12)
 
 
 def listen_to_microphone():
     Servitor.listen()
+
 
 threading.Thread(target=listen_to_microphone, daemon=True).start()
 
@@ -23,13 +25,11 @@ async def create_upload_file(my_file: UploadFile):
     print(my_file.filename)
     file = my_file.file
     print(f"tipo do arquivo {type(file)}")
-    
-    file =  file.read()
+    file = file.read()
 
-    Servitor.process_audio(file)#escreve como audio.wav
-    Servitor.play_audio() #pega o audio original e modifica com sox e da play
+    Servitor.process_audio(file)  # escreve como audio.wav
+    Servitor.play_audio()  # pega o audio original e modifica com sox e da play
     return {"filename": my_file}
-
 
 
 if __name__ == "__main__":
