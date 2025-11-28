@@ -4,10 +4,6 @@ import threading
 import uvicorn
 
 
-
-
-
-
 app = FastAPI()
 Servitor = ServitorClient("ServitorClient", "192.168.0.14", 12)
 
@@ -26,8 +22,9 @@ async def create_upload_file(my_file: UploadFile):
     print(f"tipo do arquivo {type(file)}")
     file = file.read()
 
-    Servitor.process_audio(file)  # escreve como audio.wav
-    Servitor.play_audio()  # pega o audio original e modifica com sox e da play
+    processed_audio, sample_rate = Servitor.process_audio(
+        file)
+    Servitor.play_audio(processed_audio, sample_rate)
     return {"filename": my_file}
 
 

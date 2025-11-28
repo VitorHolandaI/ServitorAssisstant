@@ -1,1 +1,0 @@
-https://fallendeity.github.io/discord.py-masterclass/creating-a-bot/#using-commands-and-events
