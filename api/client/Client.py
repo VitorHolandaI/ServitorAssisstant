@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-import requests
-import socket
-import speech_recognition as sr
-import RPi.GPIO as GPIO
-import time
 import os
-from playsound3 import playsound
+import sox
+import time
+import socket
+import requests
 import subprocess
+import sounddevice
+import numpy as np
+import soundfile as sf
 from io import BytesIO
+import RPi.GPIO as GPIO
+import speech_recognition as sr
+from playsound3 import playsound
 
 
 class ServitorClient:
@@ -58,17 +62,40 @@ class ServitorClient:
             GPIO.setup(pin, GPIO.OUT)
             self.pwm = GPIO.PWM(pin, 1000)
 
-
     def process_audio(self, audio):
-        #fazer lazy loading do processamento etc para dps dar play
+        # audio em bytes
+        # fazer lazy loading do processamento etc para dps dar play
+        # audio em bytes traduzindo em np array modificado e retornado para dar play
         """
         function to call process audio functions
 
         :param audio str: the audio name file
         """
-        audio_name = 'audio.wav'
-        with open(audio_name, 'wb') as f:
-            f.write(audio)
+
+        data, samplerate = sf.read(BytesIO(audio))
+        # Use sox to process the audio
+        tfm = sox.Transformer()
+        tfm.overdrive(50)
+        tfm.gain(gain_db=-10.0, normalize=True)
+        tfm.gain(gain_db=-3.0)
+        tfm.reverb(reverberance=50, high_freq_damping=30,
+                   room_scale=60, pre_delay=10)
+
+        audio_numpy_array = tfm.build_array(
+            input_array=data, sample_rate_in=samplerate)
+
+        return (audio_numpy_array, samplerate)
+
+    def play_audio(self, processed_audio, sample_rate):
+        """
+        Function to play the specific audio file.
+        """
+
+        try:
+            sounddevice.play(processed_audio, sample_rate)
+        except Exception as e:
+            print(f"Error running play of audio {e}")
+        time.sleep(1)
 
     def process_audio2(self, audio):
         """
@@ -79,6 +106,7 @@ class ServitorClient:
         audio_name = 'audio2.wav'
         with open(audio_name, 'wb') as f:
             f.write(audio)
+
     def send_audio(self):
         """
         Function to send and audio file to the remote or local server..
@@ -103,27 +131,12 @@ class ServitorClient:
         a block size of 4096 after sending it it closes the connection.
         """
         url = f"http://{self.server}:8000/file_recorded"
-        byte_file = BytesIO(audio_bytes)
+        byte_file = BytesIO(audio_bytes) #kinda transforming back to Bytes io here
 
         files = {'my_file': byte_file}
 
         res = requests.post(url, files=files)
         print(res)
-
-    def play_audio(self):
-        """
-        Function to play the specific audio file.
-        """
-        try:
-            command = 'sox audio.wav robot_voice.wav' + \
-                ' overdrive 50 gain -n -10.0 gain -3.0 reverb 50 30 60 10 0 0'
-            subprocess.Popen(command, shell=True, executable="/bin/bash")
-            print("Convert worked")
-        except subprocess.CalledProcessError as e:
-            print(f"Error running convert of audio {e}")
-        time.sleep(1)
-        playsound('robot_voice.wav')
-        os.remove('audio.wav')
 
     def listen(self):
         """

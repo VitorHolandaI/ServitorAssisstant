@@ -1,10 +1,20 @@
 import re
+from io import BytesIO
 import requests
 import time
+from dotenv import load_dotenv
 import socket
 import pyttsx3
+import wave
+from piper import SynthesisConfig
+from piper import PiperVoice
 from ollama import Client
 import speech_recognition as sr
+import os
+
+load_dotenv()
+voice_path = os.getenv('VOICE_PATH')
+print(voice_path)
 
 
 class ServitorServer:
@@ -40,7 +50,7 @@ class ServitorServer:
             "curiosity for cience in all manners ,also only need short reponses," +\
             " you are like a magos from " + \
             "a library from teh imperium and answeer all questioes "
-        response = client.chat('llama3.2:3b',
+        response = client.chat('llama3.2:1b', keep_alive=0,
                                messages=[
                                    {'role': 'system', 'content': system_prompt},
                                    {'role': 'user', 'content': talk}
@@ -78,12 +88,42 @@ class ServitorServer:
         talk = self.process_ollama(talk)
 
         print("Now in tts")
-        syntesis_engine_audio = pyttsx3.init()
-        syntesis_engine_audio.setProperty('rate', 120)
-        syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
-        syntesis_engine_audio.runAndWait()
+        voice = PiperVoice.load(
+            "/home/vitor/git/ServitorAssisstant/voice_models/en_US-ryan-medium.onnx")
+        bytes_audio = BytesIO()
 
-        return 0
+        syn_config_1 = SynthesisConfig(
+            volume=0.1,
+            length_scale=2.0,
+            noise_scale=0.5,
+            noise_w_scale=1.0,
+            normalize_audio=False,
+        )
+
+        with wave.open(bytes_audio, "wb") as wav_file:
+            voice.synthesize_wav(talk, wav_file, syn_config=syn_config_1)
+
+        audio_bytes = bytes_audio.getvalue()
+
+        return audio_bytes
+
+    def send_audio_bytes(self, audio_bytes):
+        """
+        Function to send and audio file to the remote or local server..
+        This function creates a socket connection to the server to use port 8080
+        and connect it will send the audio file .wav to the server to be
+        processed there.
+        For documenting: the file is read and send over as a binary file,
+        a block size of 4096 after sending it it closes the connection.
+        """
+        url = f"http://{self.client_ip}:8000/play_file"
+        byte_file = BytesIO(audio_bytes)
+
+        files = {'my_file': byte_file}
+
+        res = requests.post(url, files=files)
+
+        print(res)
 
     def send_audio_recorded(self):
         """
@@ -101,6 +141,4 @@ class ServitorServer:
         url = f"http://{self.client_ip}:8000/file_recorded"
         files = {'my_file': open('audio3.wav', 'rb')}
         res = requests.post(url, files=files)
-        print(res)
-
-        # send file as server is doing other things
+        print(res)       # send file as server is doing other things
