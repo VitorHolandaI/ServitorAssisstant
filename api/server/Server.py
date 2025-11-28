@@ -2,6 +2,7 @@ import re
 from io import BytesIO
 import requests
 import time
+from dotenv import load_dotenv
 import socket
 import pyttsx3
 import wave
@@ -9,6 +10,11 @@ from piper import SynthesisConfig
 from piper import PiperVoice
 from ollama import Client
 import speech_recognition as sr
+import os
+
+load_dotenv()
+voice_path = os.getenv('VOICE_PATH')
+print(voice_path)
 
 
 class ServitorServer:
@@ -83,7 +89,7 @@ class ServitorServer:
 
         print("Now in tts")
         voice = PiperVoice.load(
-            "/full_path/voice_models/en_US-ryan-medium.onnx")
+            "/home/vitor/git/ServitorAssisstant/voice_models/en_US-ryan-medium.onnx")
         bytes_audio = BytesIO()
 
         syn_config_1 = SynthesisConfig(
