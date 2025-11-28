@@ -4,6 +4,9 @@ import requests
 import time
 import socket
 import pyttsx3
+import wave
+from piper import SynthesisConfig
+from piper import PiperVoice
 from ollama import Client
 import speech_recognition as sr
 
@@ -41,7 +44,7 @@ class ServitorServer:
             "curiosity for cience in all manners ,also only need short reponses," +\
             " you are like a magos from " + \
             "a library from teh imperium and answeer all questioes "
-        response = client.chat('llama3.2:3b', keep_alive=0,
+        response = client.chat('llama3.2:1b', keep_alive=0,
                                messages=[
                                    {'role': 'system', 'content': system_prompt},
                                    {'role': 'user', 'content': talk}
@@ -79,14 +82,24 @@ class ServitorServer:
         talk = self.process_ollama(talk)
 
         print("Now in tts")
+        voice = PiperVoice.load(
+            "/full_path/voice_models/en_US-ryan-medium.onnx")
+        bytes_audio = BytesIO()
 
+        syn_config_1 = SynthesisConfig(
+            volume=0.1,
+            length_scale=2.0,
+            noise_scale=0.5,
+            noise_w_scale=1.0,
+            normalize_audio=False,
+        )
 
-        syntesis_engine_audio = pyttsx3.init()
-        syntesis_engine_audio.setProperty('rate', 120)
-        syntesis_engine_audio.save_to_file(talk, 'audio2.wav')
-        syntesis_engine_audio.runAndWait()
+        with wave.open(bytes_audio, "wb") as wav_file:
+            voice.synthesize_wav(talk, wav_file, syn_config=syn_config_1)
 
-        return 0
+        audio_bytes = bytes_audio.getvalue()
+
+        return audio_bytes
 
     def send_audio_bytes(self, audio_bytes):
         """
@@ -105,6 +118,7 @@ class ServitorServer:
         res = requests.post(url, files=files)
 
         print(res)
+
     def send_audio_recorded(self):
         """
 
@@ -122,5 +136,3 @@ class ServitorServer:
         files = {'my_file': open('audio3.wav', 'rb')}
         res = requests.post(url, files=files)
         print(res)
-
-        # send file as server is doing other things
