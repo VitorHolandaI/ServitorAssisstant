@@ -24,7 +24,7 @@ class ServitorServer:
     and sending it back.
     """
 
-    def __init__(self, name, client_ip):
+    def __init__(self, name, client_ip,graph):
         """
         Initializer function takes the name and the ip adress
         from the client that plays the audios
@@ -33,6 +33,7 @@ class ServitorServer:
         """
         self.name = name
         self.client_ip = client_ip
+        self.graph = graph
 
     def process_ollama(self, talk: str):
         """
