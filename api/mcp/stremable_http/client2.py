@@ -20,7 +20,10 @@ async def main():
             tools = await load_mcp_tools(session)
             llm = ChatOllama(model="llama3.1:8b",
                              base_url="http://192.168.0.11:11434")
+
+            #llm.bind_tools(tools) #WONT WORK WITH THIS
             agent = create_agent(llm, tools)
+
             math_response = await agent.ainvoke({"messages": "what's the weather in new york?"})
             print(math_response)
 if __name__ == "__main__":
