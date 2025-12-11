@@ -1,16 +1,19 @@
+
+import os
 import re
-from io import BytesIO
-import requests
 import time
-from dotenv import load_dotenv
+import wave
 import socket
 import pyttsx3
-import wave
-from piper import SynthesisConfig
-from piper import PiperVoice
+import asyncio
+import requests
+from io import BytesIO
 from ollama import Client
+from piper import PiperVoice
+from dotenv import load_dotenv
 import speech_recognition as sr
-import os
+from piper import SynthesisConfig
+from mcp_module.stremable_http.client2 import llm_mcp_client
 
 load_dotenv()
 voice_path = os.getenv('VOICE_PATH')
@@ -33,34 +36,44 @@ class ServitorServer:
         """
         self.name = name
         self.client_ip = client_ip
+        self.agent = ""
+        self.initial_agent()
 
-    def process_ollama(self, talk: str):
+    def initial_agent(self):
+        system_prompt = "You are now a warhammer 40k MAGOs,use the same persolnality as one" +\
+            "showing " +\
+            "curiosity for cience in all manners ,also only need short reponses," +\
+            " you are like a magos from " + \
+            "a library from teh imperium and answeer all questioes "
+
+        agent_mcp = llm_mcp_client(mcp_adress="http://localhost:8000/mcp",
+                                   model_name="llama3.2:1b", model_address="http://127.0.0.1:11434", system_prompt=system_prompt)
+        # deveria customizar o agente aqui dizendo o prompt que deve usar
+        self.agent = agent_mcp
+
+    async def process_ollama(self, talk: str):
         """
         This function right now talks to the local ollama.
 
         :param talk: a string with query of the user.
         """
         print(f"this was the phrase {talk}")
-        client = Client(
-            host='http://127.0.0.1:11434',
-            headers={'x-some-header': 'some-value'}
-        )
-        system_prompt = "You are now a warhammer 40k MAGOs,use the same persolnality as one" +\
-            "showing " +\
-            "curiosity for cience in all manners ,also only need short reponses," +\
-            " you are like a magos from " + \
-            "a library from teh imperium and answeer all questioes "
-        response = client.chat('llama3.2:1b', keep_alive=0,
-                               messages=[
-                                   {'role': 'system', 'content': system_prompt},
-                                   {'role': 'user', 'content': talk}
-                               ])
+        # nao tem custom message ainda
+        response = await self.agent.get_response(talk)
 
-        responseString = re.sub(r'<think>.*?</think>\n*', '',
-                                response.message.content, flags=re.DOTALL)
+        # not the best thing here refact refact refact
+        responeString = ""
+        if response is None:  # HELL THE CHECK OF NONE
+            responseString = "Some error Occurred"
+        else:
+            response = response['messages'][-1].content
+            responseString = re.sub(r'<think>.*?</think>\n*', '',
+                                    response, flags=re.DOTALL)
+
+        print(f"THIS WAS WHAT THE MODEL RESPONDED {responseString} ")
         return responseString
 
-    def process_audio(self, audio_file):
+    async def process_audio(self, audio_file):
         """
         Audio to process the audio,it reads the send file from the client.
 
@@ -85,7 +98,8 @@ class ServitorServer:
             print(f"Could not request results from Vosk; {e}")
 
         print(f'u said{talk}')
-        talk = self.process_ollama(talk)
+
+        talk = await self.process_ollama(talk)
 
         print("Now in tts")
         voice = PiperVoice.load(
