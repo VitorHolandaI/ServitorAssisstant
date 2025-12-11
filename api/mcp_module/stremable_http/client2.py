@@ -1,6 +1,7 @@
 from mcp import ClientSession
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
+from langchain.messages import ToolMessage, AIMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -24,7 +25,20 @@ class llm_mcp_client():
                 try:
                     response = await agent.ainvoke(
                         {"messages": message})
+
+                    tool_calls_used = []
+                    for msg in response["messages"]:
+                        if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                            for call in msg.tool_calls:
+                                tool_calls_used.append({
+                                    "tool": call.get("name"),
+                                    "arguments": call.get("args"),
+                                    "id": call.get("id"),
+                                    "type": call.get("type"),
+                                })
+                    print("TOOL CALLS:", tool_calls_used)
+                    return response
                 except Exception as error:
                     print(
                         f"Model was not able to be called with message the error was {error}")
-        return response
+                    return None
