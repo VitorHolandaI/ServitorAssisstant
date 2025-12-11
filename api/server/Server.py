@@ -27,7 +27,7 @@ class ServitorServer:
     and sending it back.
     """
 
-    def __init__(self, name, client_ip, graph):
+    def __init__(self, name, client_ip):
         """
         Initializer function takes the name and the ip adress
         from the client that plays the audios
@@ -36,8 +36,8 @@ class ServitorServer:
         """
         self.name = name
         self.client_ip = client_ip
-        self.graph = graph
         self.agent = ""
+        self.initial_agent()
 
     def initial_agent(self):
         system_prompt = "You are now a warhammer 40k MAGOs,use the same persolnality as one" +\
@@ -47,7 +47,7 @@ class ServitorServer:
             "a library from teh imperium and answeer all questioes "
 
         agent_mcp = llm_mcp_client(mcp_adress="http://localhost:8000/mcp",
-                                   model_name="llama3.1:8b", model_address="http://172.22.165.144:11434", system_prompt=system_prompt)
+                                   model_name="llama3.2:1b", model_address="http://127.0.0.1:11434", system_prompt=system_prompt)
         # deveria customizar o agente aqui dizendo o prompt que deve usar
         self.agent = agent_mcp
 
@@ -61,13 +61,19 @@ class ServitorServer:
         # nao tem custom message ainda
         response = await self.agent.get_response(talk)
 
-        response = response['messages'][-1].content
+        # not the best thing here refact refact refact
+        responeString = ""
+        if response is None:  # HELL THE CHECK OF NONE
+            responseString = "Some error Occurred"
+        else:
+            response = response['messages'][-1].content
+            responseString = re.sub(r'<think>.*?</think>\n*', '',
+                                    response, flags=re.DOTALL)
 
-        responseString = re.sub(r'<think>.*?</think>\n*', '',
-                                response.message.content, flags=re.DOTALL)
+        print(f"THIS WAS WHAT THE MODEL RESPONDED {responseString} ")
         return responseString
 
-    def process_audio(self, audio_file):
+    async def process_audio(self, audio_file):
         """
         Audio to process the audio,it reads the send file from the client.
 
@@ -92,7 +98,8 @@ class ServitorServer:
             print(f"Could not request results from Vosk; {e}")
 
         print(f'u said{talk}')
-        talk = self.process_ollama(talk)
+
+        talk = await self.process_ollama(talk)
 
         print("Now in tts")
         voice = PiperVoice.load(
