@@ -17,6 +17,7 @@ This project uses a combination of natural language processing (NLP) and text-to
 * LLM Provider: Ollama
 * Client Device: Raspberry Pi
 * Audio Processing Tool: SoX
-
+## Photo
+![3d_skull](skull.jpg)
 
 Well the llamma wrote this up here, and i did some editing it does a good job.
