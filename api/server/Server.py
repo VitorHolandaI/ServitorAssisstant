@@ -1,7 +1,7 @@
-
 import os
 import re
 import time
+import json
 import wave
 import socket
 import pyttsx3
@@ -44,11 +44,15 @@ class ServitorServer:
             "showing " +\
             "curiosity for cience in all manners ,also only need short reponses," +\
             " you are like a magos from " + \
-            "a library from teh imperium and answeer all questioes "
+            "a library from teh imperium and answeer all questioes AND RESPOND IN ENGLISH!!!!"
 
         agent_mcp = llm_mcp_client(mcp_adress="http://localhost:8000/mcp",
                                    model_name="llama3.2:1b", model_address="http://127.0.0.1:11434", system_prompt=system_prompt)
         # deveria customizar o agente aqui dizendo o prompt que deve usar
+
+#        agent_mcp = llm_mcp_client(mcp_adress="http://localhost:8000/mcp",
+#                                   model_name="llama3.2:1b", model_address="http://127.0.0.1:11434", system_prompt=system_prompt)
+#
         self.agent = agent_mcp
 
     async def process_ollama(self, talk: str):
@@ -84,6 +88,8 @@ class ServitorServer:
         """
 
         print("Process audio func")
+
+        print('1'*10)
         r = sr.Recognizer()
 
         with sr.AudioFile(audio_file) as source:
@@ -98,8 +104,18 @@ class ServitorServer:
             print(f"Could not request results from Vosk; {e}")
 
         print(f'u said{talk}')
+        print(f'u said{talk}')
+        print(type(talk))
+        talk_dict = json.loads(talk)
+        talk_iten = talk_dict['text']
+        talk_len = len(talk_iten)
 
-        talk = await self.process_ollama(talk)
+        if (talk_len < 15):
+            talk = "Negative"
+            print("Lower than 15")
+        else:
+            print("OK can process talk")
+            talk = await self.process_ollama(talk)
 
         print("Now in tts")
         voice = PiperVoice.load(
@@ -108,9 +124,9 @@ class ServitorServer:
 
         syn_config_1 = SynthesisConfig(
             volume=0.1,
-            length_scale=2.0,
-            noise_scale=0.5,
-            noise_w_scale=1.0,
+            length_scale=1.5,
+            noise_scale=0.3,
+            noise_w_scale=0.8,
             normalize_audio=False,
         )
 
