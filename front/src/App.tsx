@@ -55,12 +55,13 @@ const App: React.FC = () => {
 
 		try {
 			// Set URL based on audio toggle
+			console.log(import.meta.env.VITE_REACT_APP_API_URL);
 			const apiUrl = isAudio
-				? import.meta.env.REACT_APP_API_URL
+				? import.meta.env.VITE_REACT_APP_API_URL_AUDIO
 
-				: import.meta.env.REACT_APP_API_URL_AUDIo;
+				: import.meta.env.VITE_REACT_APP_API_URL;
 
-			setUrl(apiUrl); // Fixed: was setSetUrl
+			console.log(apiUrl);
 
 			const response = await fetch(apiUrl, {
 				method: 'POST',
