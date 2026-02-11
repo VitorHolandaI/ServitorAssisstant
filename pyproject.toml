@@ -96,7 +96,7 @@ dependencies = [
     "ollama==0.6.1",
     "packaging==25.0",
     "pandas==1.5.3",
-    "pillow==12.0.0",
+    "pillow==12.1.1",
     "platformdirs==4.5.0",
     "playsound3==3.3.0",
     "pooch==1.8.2",
