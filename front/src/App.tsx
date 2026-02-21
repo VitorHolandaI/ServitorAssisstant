@@ -1,5 +1,5 @@
 // src/App.tsx
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import './App.css';
 
 interface Message {
@@ -23,9 +23,7 @@ const App: React.FC = () => {
 	const [isLoading, setIsLoading] = useState(false);
 	const [isAudio, setIsAudio] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
-	const [url, setUrl] = useState(''); // Fixed: was setSetUrl
-
-	const handleToggle = () => { // Fixed: was hangleToggle
+	const handleToggle = () => {
 		setIsAudio(!isAudio);
 	};
 
