@@ -3,13 +3,18 @@ import os
 import re
 import json
 import wave
+import sqlite3
+import datetime
 import requests
 from io import BytesIO
+from pathlib import Path
 from piper import PiperVoice
 from dotenv import load_dotenv
 import speech_recognition as sr
 from piper import SynthesisConfig
 from mcp_module.stremable_http.client2 import llm_mcp_client
+
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
 load_dotenv()
 voice_path = os.getenv('VOICE_PATH')
@@ -38,20 +43,30 @@ class ServitorServer:
         self.initial_agent()
 
     def initial_agent(self):
-        system_prompt = "You are now a warhammer 40k MAGOs,use the same persolnality as one" +\
-            "showing " +\
-            "curiosity for cience in all manners ,also only need short reponses," +\
-            " you are like a magos from " + \
-            "a library from teh imperium and answeer all questioes "
+        self.base_prompt = (
+            "You are now a warhammer 40k MAGOs, use the same personality as one, "
+            "showing curiosity for science in all manners. Only need short responses. "
+            "You are like a magos from a library from the imperium and answer all questions. "
+            "When the user asks to create a task with a relative time like 'today', 'tomorrow', "
+            "'at 5pm', you MUST use the current date/time provided below to calculate the exact "
+            "due_at value in 'YYYY-MM-DD HH:MM:SS' format."
+        )
 
         agent_mcp = llm_mcp_client(
             mcp_addresses=["http://localhost:8000/mcp"],
-            model_name="llama3.2:3b",
+            model_name="llama3.2:1b",
             model_address="http://127.0.0.1:11434",
-            system_prompt=system_prompt
+            system_prompt=self.base_prompt
         )
-        # deveria customizar o agente aqui dizendo o prompt que deve usar
         self.agent = agent_mcp
+
+    def get_prompt_with_time(self):
+        now = datetime.datetime.now()
+        return (
+            f"{self.base_prompt}\n\n"
+            f"CURRENT DATE AND TIME: {now.strftime('%Y-%m-%d %H:%M:%S')} "
+            f"({now.strftime('%A')}), Timezone: America/Recife"
+        )
 
     async def process_ollama(self, talk: str):
         """
@@ -61,7 +76,7 @@ class ServitorServer:
         """
         print(f"this was the phrase {talk}")
         # nao tem custom message ainda
-        response = await self.agent.get_response(talk)
+        response = await self.agent.get_response(talk, system_prompt=self.get_prompt_with_time())
 
         # not the best thing here refact refact refact
         responeString = ""
@@ -80,7 +95,7 @@ class ServitorServer:
         inside_think = False
         buffer = ""
 
-        async for chunk in self.agent.get_response_stream(talk):
+        async for chunk in self.agent.get_response_stream(talk, system_prompt=self.get_prompt_with_time()):
             buffer += chunk
 
             while buffer:
@@ -161,6 +176,45 @@ class ServitorServer:
         talk = await self.process_ollama(talk)
 
         return self.generate_audio(talk)
+
+    async def check_due_reminders(self):
+        """Check DB for tasks matching current hour:minute and send audio reminder."""
+        if not DB_PATH.exists():
+            print("[Reminder] No DB found, skipping")
+            return []
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        now = datetime.datetime.now()
+        current_time = now.strftime('%Y-%m-%d %H:%M')
+        tasks = conn.execute(
+            "SELECT * FROM tasks WHERE is_completed = 0 AND due_at IS NOT NULL AND strftime('%Y-%m-%d %H:%M', due_at) = ?",
+            (current_time,)
+        ).fetchall()
+        conn.close()
+
+        if not tasks:
+            return []
+
+        reminded = []
+        for task in tasks:
+            title = task['title']
+            desc = task['description'] or ''
+            print(f"[Reminder] Task now: {title}")
+
+            prompt = (
+                f"ALERT: You must remind the user about a scheduled task that is due RIGHT NOW. "
+                f"The task is: '{title}'. "
+                f"{'Description: ' + desc + '. ' if desc else ''}"
+                f"Give a short urgent reminder in character as a Magos. Keep it under 3 sentences."
+            )
+
+            response = await self.process_ollama(prompt)
+            audio_bytes = self.generate_audio(response)
+            self.send_audio_bytes(audio_bytes)
+            reminded.append({"id": task['id'], "title": title})
+
+        return reminded
 
     def send_audio_bytes(self, audio_bytes):
         """

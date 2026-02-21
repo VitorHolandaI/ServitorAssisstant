@@ -47,6 +47,12 @@ async def stream_message(data: Dict[str, Any]):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
+@app.get("/check_reminders")
+async def check_reminders():
+    reminded = await Servitor.check_due_reminders()
+    return {"reminded": reminded}
+
+
 @app.post("/file_recorded")
 async def create_upload_file(my_file: UploadFile):
     print(my_file.filename)

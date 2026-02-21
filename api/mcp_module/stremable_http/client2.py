@@ -15,7 +15,7 @@ class llm_mcp_client():
         self.model_address = model_address
         self.prompt = system_prompt
 
-    async def get_response(self, message):
+    async def get_response(self, message, system_prompt=None):
         all_tools = []
         async with contextlib.AsyncExitStack() as stack:
             clients = [await stack.enter_async_context(streamablehttp_client(addr)) for addr in self.mcp_addresses]
@@ -26,9 +26,9 @@ class llm_mcp_client():
                 tools = await load_mcp_tools(session)
                 all_tools.extend(tools)
 
-            llm = ChatOllama(model=self.model_name, base_url=self.model_address)
-            print("Agent Creation")
-            agent = create_agent(llm, all_tools, system_prompt=self.prompt)
+            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=0)
+            prompt = system_prompt or self.prompt
+            agent = create_agent(llm, all_tools, system_prompt=prompt)
             try:
                 response = await agent.ainvoke({"messages": message})
 
@@ -48,7 +48,7 @@ class llm_mcp_client():
                 print(f"Model was not able to be called with message the error was {error}")
                 return None
 
-    async def get_response_stream(self, message):
+    async def get_response_stream(self, message, system_prompt=None):
         all_tools = []
         async with contextlib.AsyncExitStack() as stack:
             clients = [await stack.enter_async_context(streamablehttp_client(addr)) for addr in self.mcp_addresses]
@@ -59,8 +59,9 @@ class llm_mcp_client():
                 tools = await load_mcp_tools(session)
                 all_tools.extend(tools)
 
-            llm = ChatOllama(model=self.model_name, base_url=self.model_address)
-            agent = create_agent(llm, all_tools, system_prompt=self.prompt)
+            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=0)
+            prompt = system_prompt or self.prompt
+            agent = create_agent(llm, all_tools, system_prompt=prompt)
             try:
                 text_buffer = ""
                 async for event in agent.astream_events({"messages": message}, version="v2"):
