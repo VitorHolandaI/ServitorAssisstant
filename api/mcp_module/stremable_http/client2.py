@@ -42,3 +42,23 @@ class llm_mcp_client():
                     print(
                         f"Model was not able to be called with message the error was {error}")
                     return None
+
+    async def get_response_stream(self, message):
+        async with streamablehttp_client(self.mcp_adress) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await load_mcp_tools(session)
+                llm = ChatOllama(model=self.model_name,
+                                 base_url=self.model_address)
+                agent = create_agent(llm, tools, system_prompt=self.prompt)
+                try:
+                    async for event in agent.astream_events(
+                        {"messages": message}, version="v2"
+                    ):
+                        if event["event"] == "on_chat_model_stream":
+                            chunk = event["data"].get("chunk")
+                            if chunk and hasattr(chunk, "content") and chunk.content:
+                                yield chunk.content
+                except Exception as error:
+                    print(f"Streaming error: {error}")
+                    yield f"[ERROR] {error}"

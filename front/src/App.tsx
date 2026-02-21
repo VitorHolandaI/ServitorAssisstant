@@ -54,38 +54,75 @@ const App: React.FC = () => {
 		setIsLoading(true);
 
 		try {
-			// Set URL based on audio toggle
-			console.log(import.meta.env.VITE_REACT_APP_API_URL);
-			const apiUrl = isAudio
-				? import.meta.env.VITE_REACT_APP_API_URL_AUDIO
+			if (isAudio) {
+				// Audio mode - keep original request/response flow
+				const apiUrl = import.meta.env.VITE_REACT_APP_API_URL_AUDIO;
+				const response = await fetch(apiUrl, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ message: inputValue }),
+				});
+				if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
+				const data = await response.json();
+				const botMessage: Message = {
+					id: Date.now().toString(),
+					text: data.response || 'No response received',
+					sender: 'bot',
+					timestamp: new Date(),
+				};
+				setMessages(prev => [...prev, botMessage]);
+			} else {
+				// Text mode - use SSE streaming
+				const apiUrl = import.meta.env.VITE_REACT_APP_API_URL_STREAM;
+				const response = await fetch(apiUrl, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ message: inputValue }),
+				});
+				if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
-				: import.meta.env.VITE_REACT_APP_API_URL;
+				const botMessageId = Date.now().toString();
+				const botMessage: Message = {
+					id: botMessageId,
+					text: '',
+					sender: 'bot',
+					timestamp: new Date(),
+				};
+				setMessages(prev => [...prev, botMessage]);
 
-			console.log(apiUrl);
+				const reader = response.body!.getReader();
+				const decoder = new TextDecoder();
+				let buffer = '';
 
-			const response = await fetch(apiUrl, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({ message: inputValue }),
-			});
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
 
-			if (!response.ok) {
-				throw new Error(`HTTP error! Status: ${response.status}`); // Fixed: was incorrect syntax
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split('\n');
+					buffer = lines.pop() || '';
+
+					for (const line of lines) {
+						if (!line.startsWith('data: ')) continue;
+						const jsonStr = line.slice(6);
+						try {
+							const parsed = JSON.parse(jsonStr);
+							if (parsed.done) break;
+							if (parsed.content) {
+								setMessages(prev =>
+									prev.map(msg =>
+										msg.id === botMessageId
+											? { ...msg, text: msg.text + parsed.content }
+											: msg
+									)
+								);
+							}
+						} catch {
+							// skip malformed JSON
+						}
+					}
+				}
 			}
-
-			const data = await response.json();
-
-			// Add bot response
-			const botMessage: Message = {
-				id: Date.now().toString(),
-				text: data.response || 'No response received',
-				sender: 'bot',
-				timestamp: new Date(),
-			};
-
-			setMessages(prev => [...prev, botMessage]);
 		} catch (error) {
 			console.error('Error sending message:', error);
 			const errorMessage: Message = {

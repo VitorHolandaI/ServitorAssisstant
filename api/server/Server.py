@@ -73,6 +73,37 @@ class ServitorServer:
         print(f"THIS WAS WHAT THE MODEL RESPONDED {responseString} ")
         return responseString
 
+    async def process_ollama_stream(self, talk: str):
+        print(f"this was the phrase (stream) {talk}")
+        inside_think = False
+        buffer = ""
+
+        async for chunk in self.agent.get_response_stream(talk):
+            buffer += chunk
+
+            while buffer:
+                if inside_think:
+                    end_idx = buffer.find("</think>")
+                    if end_idx != -1:
+                        buffer = buffer[end_idx + len("</think>"):]
+                        inside_think = False
+                        if buffer.startswith("\n"):
+                            buffer = buffer[1:]
+                    else:
+                        break
+                else:
+                    start_idx = buffer.find("<think>")
+                    if start_idx != -1:
+                        if start_idx > 0:
+                            yield buffer[:start_idx]
+                        buffer = buffer[start_idx + len("<think>"):]
+                        inside_think = True
+                    else:
+                        if "<" in buffer and not buffer.endswith(">"):
+                            break
+                        yield buffer
+                        buffer = ""
+
     async def process_audio(self, audio_file):
         """
         Audio to process the audio,it reads the send file from the client.
