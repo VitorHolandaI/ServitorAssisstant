@@ -31,11 +31,18 @@ async def receive_text(data: Dict[str, Any]):
 @app.post("/stream_message")
 async def stream_message(data: Dict[str, Any]):
     message = data.get("message", "No message provided")
+    audio_mode = data.get("audio", False)
 
     async def event_generator():
+        full_response = ""
         async for chunk in Servitor.process_ollama_stream(message):
+            full_response += chunk
             yield f"data: {json.dumps({'content': chunk})}\n\n"
         yield f"data: {json.dumps({'done': True})}\n\n"
+
+        if audio_mode and full_response.strip():
+            audio_bytes = Servitor.generate_audio(full_response)
+            Servitor.send_audio_bytes(audio_bytes)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -45,6 +52,8 @@ async def create_upload_file(my_file: UploadFile):
     print(my_file.filename)
     file = my_file.file
     audio_bytes = await Servitor.process_audio(file)
+    if audio_bytes is None:
+        return {"status": "ignored", "reason": "short or noise input"}
     Servitor.send_audio_bytes(audio_bytes)
     return {"filename": my_file}
 

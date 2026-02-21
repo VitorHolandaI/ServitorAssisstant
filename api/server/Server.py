@@ -1,14 +1,10 @@
 
 import os
 import re
-import time
+import json
 import wave
-import socket
-import pyttsx3
-import asyncio
 import requests
 from io import BytesIO
-from ollama import Client
 from piper import PiperVoice
 from dotenv import load_dotenv
 import speech_recognition as sr
@@ -37,6 +33,8 @@ class ServitorServer:
         self.name = name
         self.client_ip = client_ip
         self.agent = ""
+        self.voice = PiperVoice.load(
+            "/home/vitor/git/ServitorAssisstant/voice_models/en_US-ryan-medium.onnx")
         self.initial_agent()
 
     def initial_agent(self):
@@ -46,8 +44,12 @@ class ServitorServer:
             " you are like a magos from " + \
             "a library from teh imperium and answeer all questioes "
 
-        agent_mcp = llm_mcp_client(mcp_adress="http://localhost:8000/mcp",
-                                   model_name="llama3.2:1b", model_address="http://127.0.0.1:11434", system_prompt=system_prompt)
+        agent_mcp = llm_mcp_client(
+            mcp_addresses=["http://localhost:8000/mcp"],
+            model_name="llama3.2:3b",
+            model_address="http://127.0.0.1:11434",
+            system_prompt=system_prompt
+        )
         # deveria customizar o agente aqui dizendo o prompt que deve usar
         self.agent = agent_mcp
 
@@ -104,6 +106,23 @@ class ServitorServer:
                         yield buffer
                         buffer = ""
 
+    def generate_audio(self, text: str) -> bytes:
+        """Generate audio bytes from text using Piper TTS."""
+        bytes_audio = BytesIO()
+
+        syn_config_1 = SynthesisConfig(
+            volume=0.1,
+            length_scale=1.0,
+            noise_scale=0.5,
+            noise_w_scale=1.0,
+            normalize_audio=False,
+        )
+
+        with wave.open(bytes_audio, "wb") as wav_file:
+            self.voice.synthesize_wav(text, wav_file, syn_config=syn_config_1)
+
+        return bytes_audio.getvalue()
+
     async def process_audio(self, audio_file):
         """
         Audio to process the audio,it reads the send file from the client.
@@ -120,37 +139,28 @@ class ServitorServer:
         with sr.AudioFile(audio_file) as source:
             audio = r.record(source)
 
+        talk = ""
         try:
-            talk = r.recognize_vosk(audio)
-            print("Process audi vosk")
+            raw = r.recognize_vosk(audio)
+            print(f"Vosk raw: {raw}")
+            parsed = json.loads(raw)
+            talk = parsed.get("text", "").strip()
         except sr.UnknownValueError:
             print("Vosk could not understand audio")
+            return None
         except sr.RequestError as e:
             print(f"Could not request results from Vosk; {e}")
+            return None
 
-        print(f'u said{talk}')
+        print(f'u said: {talk}')
+
+        if len(talk) < 10 or len(talk.split()) < 3:
+            print(f"Short/noise input ({len(talk)} chars, {len(talk.split())} words), skipping")
+            return None
 
         talk = await self.process_ollama(talk)
 
-        print("Now in tts")
-        voice = PiperVoice.load(
-            "/home/vitor/git/ServitorAssisstant/voice_models/en_US-ryan-medium.onnx")
-        bytes_audio = BytesIO()
-
-        syn_config_1 = SynthesisConfig(
-            volume=0.1,
-            length_scale=2.0,
-            noise_scale=0.5,
-            noise_w_scale=1.0,
-            normalize_audio=False,
-        )
-
-        with wave.open(bytes_audio, "wb") as wav_file:
-            voice.synthesize_wav(talk, wav_file, syn_config=syn_config_1)
-
-        audio_bytes = bytes_audio.getvalue()
-
-        return audio_bytes
+        return self.generate_audio(talk)
 
     def send_audio_bytes(self, audio_bytes):
         """
@@ -170,20 +180,3 @@ class ServitorServer:
 
         print(res)
 
-    def send_audio_recorded(self):
-        """
-
-        """
-        url = f"http://{self.client_ip}:8000/play_file"
-        files = {'my_file': open('audio2.wav', 'rb')}
-        res = requests.post(url, files=files)
-        print(res)
-
-    def send_audio_normal(self, audio_file):
-        """
-
-        """
-        url = f"http://{self.client_ip}:8000/file_recorded"
-        files = {'my_file': open('audio3.wav', 'rb')}
-        res = requests.post(url, files=files)
-        print(res)       # send file as server is doing other things

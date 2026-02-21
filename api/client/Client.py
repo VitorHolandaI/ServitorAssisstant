@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
-import os
 import sox
 import time
-import socket
 import requests
-import subprocess
 import sounddevice
 import numpy as np
 import soundfile as sf
 from io import BytesIO
 import RPi.GPIO as GPIO
 import speech_recognition as sr
-from playsound3 import playsound
 
 
 class ServitorClient:
@@ -96,30 +92,6 @@ class ServitorClient:
         except Exception as e:
             print(f"Error running play of audio {e}")
         time.sleep(1)
-
-    def process_audio2(self, audio):
-        """
-        function to call process audio functions
-
-        :param audio str: the audio name file
-        """
-        audio_name = 'audio2.wav'
-        with open(audio_name, 'wb') as f:
-            f.write(audio)
-
-    def send_audio(self):
-        """
-        Function to send and audio file to the remote or local server..
-        This function creates a socket connection to the server to use port 8080
-        and connect it will send the audio file .wav to the server to be
-        processed there.
-        For documenting: the file is read and send over as a binary file,
-        a block size of 4096 after sending it it closes the connection.
-        """
-        url = f"http://{self.server}:8000/file_recorded"
-        files = {'my_file': open('audio2.wav', 'rb')}
-        res = requests.post(url, files=files)
-        print(res)
 
     def send_audio_bytes(self, audio_bytes):
         """
