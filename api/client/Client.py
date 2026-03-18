@@ -116,7 +116,7 @@ class ServitorClient:
         For documenting: the file is read and send over as a binary file,
         a block size of 4096 after sending it it closes the connection.
         """
-        url = f"http://{self.server}:8000/file_recorded"
+        url = f"http://{self.server}:8001/file_recorded"
         files = {'my_file': open('audio2.wav', 'rb')}
         res = requests.post(url, files=files)
         print(res)
@@ -130,13 +130,30 @@ class ServitorClient:
         For documenting: the file is read and send over as a binary file,
         a block size of 4096 after sending it it closes the connection.
         """
-        url = f"http://{self.server}:8000/file_recorded"
-        byte_file = BytesIO(audio_bytes) #kinda transforming back to Bytes io here
-
+        url = f"http://{self.server}:8001/file_recorded"
+        byte_file = BytesIO(audio_bytes)
         files = {'my_file': byte_file}
 
-        res = requests.post(url, files=files)
-        print(res)
+        try:
+            res = requests.post(url, files=files, timeout=30)
+            print(res)
+        except Exception as e:
+            print(f"[SendAudio] Failed to send audio: {e}")
+
+    async def check_reminders_loop(self):
+        """Background async loop that pings the server every 60s to check for due tasks."""
+        import asyncio
+        while True:
+            try:
+                url = f"http://{self.server}:8001/check_reminders"
+                res = await asyncio.to_thread(requests.get, url, timeout=30)
+                data = res.json()
+                reminded = data.get("reminded", [])
+                if reminded:
+                    print(f"[Reminder] Server sent reminders for: {[t['title'] for t in reminded]}")
+            except Exception as e:
+                print(f"[Reminder] Error checking reminders: {e}")
+            await asyncio.sleep(60)
 
     def listen(self):
         """
@@ -146,17 +163,20 @@ class ServitorClient:
         :param sr speech_recognition module: used to listen to the microphone
         """
         while True:
-            with sr.Microphone(device_index=2) as source:
-                print("Adjusting To noise")
-                self.recognizer.adjust_for_ambient_noise(source)
-                self.led_on_low()
-                audio = self.recognizer.listen(source, phrase_time_limit=10)
-                print("Speak2!")
-                wav_data = audio.get_wav_data()
-                print("Speak3!")
-                self.led_off()
-                # its aredy bytes mf self.process_audio2(wav_data)
-                print("Speak4!")
-                self.send_audio_bytes(wav_data)
-                print("Speak5!")
-                time.sleep(10)
+            try:
+                with sr.Microphone(device_index=1) as source:
+                    print("Adjusting To noise")
+                    self.recognizer.adjust_for_ambient_noise(source, duration=4)
+                    self.led_on_low()
+                    audio = self.recognizer.listen(source, phrase_time_limit=10)
+                    print("Speak2!")
+                    wav_data = audio.get_wav_data()
+                    print("Speak3!")
+                    self.led_off()
+                    print("Speak4!")
+                    self.send_audio_bytes(wav_data)
+                    print("Speak5!")
+                    time.sleep(10)
+            except Exception as e:
+                print(f"[Listen] Error: {e}, retrying in 5s...")
+                time.sleep(5)
