@@ -53,7 +53,7 @@ class ServitorServer:
         )
 
         agent_mcp = llm_mcp_client(
-            mcp_addresses=["http://localhost:8000/mcp"],
+            mcp_addresses=["http://localhost:8001/mcp"],
             model_name="llama3.2:1b",
             model_address="http://127.0.0.1:11434",
             system_prompt=self.base_prompt

@@ -3,3 +3,5 @@
 env/
 en/
 __pycache__/
+logs/
+data/
