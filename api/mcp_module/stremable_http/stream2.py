@@ -58,6 +58,59 @@ async def default_response(description="CALL THIS TOOL WHEN NO TOOL EXACTLY MATC
     return "there is no tool to call, so you must now only respond the user question"
 
 
+@mcp.tool()
+async def help() -> str:
+    """Returns a full reference of all available tools, their parameters, and which are required."""
+    return """
+=== MCP Server: GeneralAssistant ===
+
+── MATH ────────────────────────────────────────────
+add_numbers(a*, b*)          — Add two numbers
+subtract_numbers(a*, b*)     — Subtract b from a
+multiply_numbers(a*, b*)     — Multiply a × b
+divide_numbers(a*, b*)       — Divide a ÷ b (error if b=0)
+  * a, b: float, REQUIRED
+
+── WEATHER ─────────────────────────────────────────
+get_forecast(latitude?, longitude?)
+  — Current weather for Campina Grande (or custom coords)
+  latitude:  float, optional (default -7.2307, Campina Grande)
+  longitude: float, optional (default -35.8816, Campina Grande)
+  Returns: temperature, humidity, rain, wind speed
+
+── TASKS ───────────────────────────────────────────
+create_task(title*, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
+  title:                  string, REQUIRED
+  description:            string, optional
+  due_at:                 string, optional — format: 'YYYY-MM-DD HH:MM:SS'
+  recurrence_type:        string, optional — 'none' | 'daily' | 'weekly' | 'monthly' (default: 'none')
+  recurrence_interval:    int,    optional — e.g. 2 = every 2 days/weeks/months (default: 1)
+  recurrence_day_of_week: int,    optional — 0=Sun, 1=Mon, ..., 6=Sat (weekly recurrence)
+  recurrence_day_of_month:int,    optional — 1–31 (monthly recurrence)
+  timezone:               string, optional (default: 'America/Recife')
+
+list_tasks(show_completed?, limit?)
+  show_completed: bool, optional — include done tasks (default: False)
+  limit:          int,  optional — max results (default: 20)
+
+get_task(task_id*)
+  task_id: int, REQUIRED — ID of the task
+
+update_task(task_id*, title?, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
+  task_id: int, REQUIRED — only provided fields are updated
+
+complete_task(task_id*)
+  task_id: int, REQUIRED — marks done; if recurring, auto-creates next occurrence
+
+delete_task(task_id*)
+  task_id: int, REQUIRED — permanently deletes task
+
+── HELP ────────────────────────────────────────────
+help()         — this reference
+task_help()    — detailed task-only reference with examples
+"""
+
+
 @mcp.tool("add_numbers", description="Add two numbers and return the result.")
 async def add_numbers(a: float, b: float):
     return a + b
