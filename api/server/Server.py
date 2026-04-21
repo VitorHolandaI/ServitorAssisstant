@@ -1,8 +1,8 @@
-
 import os
 import re
 import json
 import wave
+import logging
 import sqlite3
 import datetime
 import requests
@@ -24,28 +24,27 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
 server_ip = os.getenv("SERVER_IP", "localhost")
 MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
-print(f"[Server] voice={voice_path}  mcp={MCP_ADDRESS}")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+logger.info(f"[Server] voice={voice_path}  mcp={MCP_ADDRESS}  debug={DEBUG}")
 
 
 class ServitorServer:
-    """
-    Class Fot the servitor server responsible for calling the llm and processing audio, that is geting what.
-    the user said passing that back to the llm getting the response generating audio with that response
-    and sending it back.
-    """
 
     def __init__(self, name, client_ip):
-        """
-        Initializer function takes the name and the ip adress
-        from the client that plays the audios
-        :param name str: the name of the servitor
-        :param client_ip str: ip adress of the client
-        """
         self.name = name
         self.client_ip = client_ip
         self.agent = ""
-        self.voice = PiperVoice.load(
-            "/home/vitor/git/ServitorAssisstant/voice_models/en_US-ryan-medium.onnx")
+
+        if not voice_path:
+            raise ValueError("VOICE_PATH not set in api/.env")
+        self.voice = PiperVoice.load(voice_path)
+        logger.info(f"[Server] voice model loaded from {voice_path}")
         self.initial_agent()
 
     def initial_agent(self):
@@ -67,26 +66,31 @@ class ServitorServer:
         self.agent = agent_mcp
 
     def _load_history(self) -> list:
-        """Load conversation history from DB, truncated to MAX_HISTORY_CHARS."""
         if not DB_PATH.exists():
+            logger.debug("[Server] DB not found, returning empty history")
             return []
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT 200"
-        ).fetchall()
-        conn.close()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT 200"
+            ).fetchall()
+            conn.close()
 
-        rows = list(reversed(rows))
-        history = []
-        total_chars = 0
-        for row in reversed(rows):
-            entry_chars = len(row["content"]) + len(row["created_at"]) + 20
-            if total_chars + entry_chars > MAX_HISTORY_CHARS:
-                break
-            history.insert(0, (row["role"], row["content"], row["created_at"]))
-            total_chars += entry_chars
-        return history
+            rows = list(reversed(rows))
+            history = []
+            total_chars = 0
+            for row in reversed(rows):
+                entry_chars = len(row["content"]) + len(row["created_at"]) + 20
+                if total_chars + entry_chars > MAX_HISTORY_CHARS:
+                    break
+                history.insert(0, (row["role"], row["content"], row["created_at"]))
+                total_chars += entry_chars
+            logger.debug(f"[Server] loaded {len(history)} history messages ({total_chars} chars)")
+            return history
+        except Exception as e:
+            logger.error(f"[Server] _load_history error: {e}", exc_info=DEBUG)
+            return []
 
     def get_prompt_with_time(self):
         now = datetime.datetime.now()
@@ -97,63 +101,62 @@ class ServitorServer:
         )
 
     async def process_ollama(self, talk: str):
-        """
-        This function right now talks to the local ollama.
-
-        :param talk: a string with query of the user.
-        """
-        print(f"this was the phrase {talk}")
+        logger.info(f"[Server] process_ollama: {talk[:80]!r}")
         history = self._load_history()
         response = await self.agent.get_response(talk, history=history, system_prompt=self.get_prompt_with_time())
 
-        # not the best thing here refact refact refact
-        responeString = ""
-        if response is None:  # HELL THE CHECK OF NONE
-            responseString = "Some error Occurred"
-        else:
-            response = response['messages'][-1].content
-            responseString = re.sub(r'<think>.*?</think>\n*', '',
-                                    response, flags=re.DOTALL)
+        if response is None:
+            logger.error("[Server] agent returned None")
+            return "Some error occurred"
 
-        print(f"THIS WAS WHAT THE MODEL RESPONDED {responseString} ")
-        return responseString
+        try:
+            raw = response['messages'][-1].content
+            result = re.sub(r'<think>.*?</think>\n*', '', raw, flags=re.DOTALL)
+            logger.info(f"[Server] process_ollama response: {result[:120]!r}")
+            return result
+        except Exception as e:
+            logger.error(f"[Server] process_ollama parse error: {e}", exc_info=DEBUG)
+            return "Some error occurred"
 
     async def process_ollama_stream(self, talk: str):
-        print(f"this was the phrase (stream) {talk}")
+        logger.info(f"[Server] process_ollama_stream: {talk[:80]!r}")
         inside_think = False
         buffer = ""
         history = self._load_history()
 
-        async for chunk in self.agent.get_response_stream(talk, history=history, system_prompt=self.get_prompt_with_time()):
-            buffer += chunk
+        try:
+            async for chunk in self.agent.get_response_stream(talk, history=history, system_prompt=self.get_prompt_with_time()):
+                buffer += chunk
 
-            while buffer:
-                if inside_think:
-                    end_idx = buffer.find("</think>")
-                    if end_idx != -1:
-                        buffer = buffer[end_idx + len("</think>"):]
-                        inside_think = False
-                        if buffer.startswith("\n"):
-                            buffer = buffer[1:]
-                    else:
-                        break
-                else:
-                    start_idx = buffer.find("<think>")
-                    if start_idx != -1:
-                        if start_idx > 0:
-                            yield buffer[:start_idx]
-                        buffer = buffer[start_idx + len("<think>"):]
-                        inside_think = True
-                    else:
-                        if "<" in buffer and not buffer.endswith(">"):
+                while buffer:
+                    if inside_think:
+                        end_idx = buffer.find("</think>")
+                        if end_idx != -1:
+                            buffer = buffer[end_idx + len("</think>"):]
+                            inside_think = False
+                            if buffer.startswith("\n"):
+                                buffer = buffer[1:]
+                        else:
                             break
-                        yield buffer
-                        buffer = ""
+                    else:
+                        start_idx = buffer.find("<think>")
+                        if start_idx != -1:
+                            if start_idx > 0:
+                                yield buffer[:start_idx]
+                            buffer = buffer[start_idx + len("<think>"):]
+                            inside_think = True
+                        else:
+                            if "<" in buffer and not buffer.endswith(">"):
+                                break
+                            yield buffer
+                            buffer = ""
+        except Exception as e:
+            logger.error(f"[Server] process_ollama_stream error: {e}", exc_info=DEBUG)
+            raise
 
     def generate_audio(self, text: str) -> bytes:
-        """Generate audio bytes from text using Piper TTS."""
+        logger.debug(f"[Server] generate_audio: {len(text)} chars")
         bytes_audio = BytesIO()
-
         syn_config_1 = SynthesisConfig(
             volume=0.1,
             length_scale=1.0,
@@ -161,23 +164,12 @@ class ServitorServer:
             noise_w_scale=1.0,
             normalize_audio=False,
         )
-
         with wave.open(bytes_audio, "wb") as wav_file:
             self.voice.synthesize_wav(text, wav_file, syn_config=syn_config_1)
-
         return bytes_audio.getvalue()
 
     async def process_audio(self, audio_file):
-        """
-        Audio to process the audio,it reads the send file from the client.
-
-        then tries to recognize it by using for now, vosk local api
-        prob going to change for whisper from openai?, and later
-        asks the user query for the llm that responds a text, and this
-        text will be transformed back to audio.
-        """
-
-        print("Process audio func")
+        logger.info("[Server] process_audio")
         r = sr.Recognizer()
 
         with sr.AudioFile(audio_file) as source:
@@ -186,30 +178,27 @@ class ServitorServer:
         talk = ""
         try:
             raw = r.recognize_vosk(audio)
-            print(f"Vosk raw: {raw}")
+            logger.debug(f"[Server] vosk raw: {raw}")
             parsed = json.loads(raw)
             talk = parsed.get("text", "").strip()
         except sr.UnknownValueError:
-            print("Vosk could not understand audio")
+            logger.warning("[Server] vosk could not understand audio")
             return None
         except sr.RequestError as e:
-            print(f"Could not request results from Vosk; {e}")
+            logger.error(f"[Server] vosk request error: {e}")
             return None
 
-        print(f'u said: {talk}')
-
+        logger.info(f"[Server] recognized: {talk!r}")
         if len(talk) < 10 or len(talk.split()) < 3:
-            print(f"Short/noise input ({len(talk)} chars, {len(talk.split())} words), skipping")
+            logger.info(f"[Server] short/noise input, skipping")
             return None
 
         talk = await self.process_ollama(talk)
-
         return self.generate_audio(talk)
 
     async def check_due_reminders(self):
-        """Check DB for tasks matching current hour:minute and send audio reminder."""
         if not DB_PATH.exists():
-            print("[Reminder] No DB found, skipping")
+            logger.debug("[Server] no DB, skipping reminders")
             return []
 
         conn = sqlite3.connect(DB_PATH)
@@ -229,7 +218,7 @@ class ServitorServer:
         for task in tasks:
             title = task['title']
             desc = task['description'] or ''
-            print(f"[Reminder] Task now: {title}")
+            logger.info(f"[Server] reminder due: {title}")
 
             prompt = (
                 f"ALERT: You must remind the user about a scheduled task that is due RIGHT NOW. "
@@ -246,20 +235,11 @@ class ServitorServer:
         return reminded
 
     def send_audio_bytes(self, audio_bytes):
-        """
-        Function to send and audio file to the remote or local server..
-        This function creates a socket connection to the server to use port 8080
-        and connect it will send the audio file .wav to the server to be
-        processed there.
-        For documenting: the file is read and send over as a binary file,
-        a block size of 4096 after sending it it closes the connection.
-        """
         url = f"http://{self.client_ip}:8000/play_file"
+        logger.debug(f"[Server] send_audio_bytes to {url}")
         byte_file = BytesIO(audio_bytes)
-
-        files = {'my_file': byte_file}
-
-        res = requests.post(url, files=files)
-
-        print(res)
-
+        try:
+            res = requests.post(url, files={'my_file': byte_file})
+            logger.info(f"[Server] audio sent, status={res.status_code}")
+        except Exception as e:
+            logger.error(f"[Server] send_audio_bytes error: {e}", exc_info=DEBUG)

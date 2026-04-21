@@ -159,6 +159,7 @@ dependencies = [
     "langchain",
     "langchain-mcp-adapters",
     "langchain-ollama",
+    "langgraph",
     "mcp",
     "openmeteo-requests",
     "piper-tts",
