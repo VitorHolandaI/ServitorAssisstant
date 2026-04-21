@@ -83,28 +83,33 @@ class llm_mcp_client():
             agent = create_react_agent(llm, all_tools, prompt=prompt)
             try:
                 msgs = _build_messages(message, history)
-                text_buffer = ""
+                in_tool_call = False
                 async for event in agent.astream_events({"messages": msgs}, version="v2"):
                     event_type = event["event"]
                     logger.debug(f"[client2] event: {event_type}")
 
                     if event_type == "on_chat_model_stream":
                         chunk = event["data"].get("chunk")
-                        if chunk and hasattr(chunk, "content") and chunk.content:
-                            if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
-                                continue
-                            text_buffer += chunk.content
+                        if not chunk or not hasattr(chunk, "content") or not chunk.content:
+                            continue
+                        if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
+                            in_tool_call = True
+                            continue
+                        if in_tool_call:
+                            continue
+                        logger.debug(f"[client2] yielding {len(chunk.content)} chars")
+                        yield chunk.content
 
                     elif event_type == "on_chat_model_end":
-                        stripped = text_buffer.strip()
-                        is_junk = (
-                            stripped.startswith("{") and
-                            ("function" in stripped or "tool" in stripped or "parameters" in stripped)
-                        )
-                        if not is_junk and stripped:
-                            logger.debug(f"[client2] yielding chunk ({len(text_buffer)} chars)")
-                            yield text_buffer
-                        text_buffer = ""
+                        in_tool_call = False
+
+                    elif event_type == "on_tool_start":
+                        logger.info(f"[client2] tool call: {event.get('name')}")
+
+                    elif event_type == "on_tool_end":
+                        logger.info(f"[client2] tool done: {event.get('name')}")
+                        in_tool_call = False
+
             except Exception as error:
                 logger.error(f"[client2] stream error: {error}", exc_info=DEBUG)
                 raise
