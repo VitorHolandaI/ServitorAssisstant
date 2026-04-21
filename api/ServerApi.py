@@ -107,22 +107,39 @@ async def stream_message(data: Dict[str, Any]):
     audio_mode = data.get("audio", False)
     logger.info(f"[API] stream_message: {message[:80]!r} audio={audio_mode}")
 
-    async def event_generator():
-        await asyncio.to_thread(_save_message, "user", message)
+    await asyncio.to_thread(_save_message, "user", message)
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def produce():
+        """Runs as independent background task — survives client disconnect."""
         full_response = ""
-        queue: asyncio.Queue = asyncio.Queue()
+        try:
+            async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                await queue.put((chunk_type, chunk))
+                if chunk_type == "text":
+                    full_response += chunk
+        except Exception as e:
+            logger.error(f"[API] producer error: {e}", exc_info=DEBUG)
+            await queue.put(("error", str(e)))
+        finally:
+            await queue.put(None)
+            if full_response.strip():
+                await asyncio.to_thread(_save_message, "assistant", full_response)
+                logger.info(f"[API] assistant saved ({len(full_response)} chars)")
+                if audio_mode:
+                    try:
+                        audio_bytes = Servitor.generate_audio(full_response)
+                        Servitor.send_audio_bytes(audio_bytes)
+                    except Exception as e:
+                        logger.error(f"[API] audio error: {e}", exc_info=DEBUG)
+            else:
+                logger.warning("[API] producer finished with empty response — not saved")
 
-        async def produce():
-            try:
-                async for chunk_type, chunk in Servitor.process_ollama_stream(message):
-                    await queue.put((chunk_type, chunk))
-            except Exception as e:
-                logger.error(f"[API] stream error: {e}", exc_info=DEBUG)
-                await queue.put(("error", str(e)))
-            finally:
-                await queue.put(None)
+    asyncio.create_task(produce())
 
-        producer = asyncio.create_task(produce())
+    async def event_generator():
+        """SSE stream to client. Stops on disconnect; producer keeps running."""
         try:
             while True:
                 try:
@@ -132,31 +149,17 @@ async def stream_message(data: Dict[str, Any]):
                     continue
 
                 if item is None:
+                    yield f"data: {json.dumps({'done': True})}\n\n"
                     break
 
                 chunk_type, chunk = item
                 if chunk_type == "error":
                     yield f"data: {json.dumps({'error': chunk, 'type': 'error'})}\n\n"
+                    yield f"data: {json.dumps({'done': True})}\n\n"
                     break
-                if chunk_type == "text":
-                    full_response += chunk
                 yield f"data: {json.dumps({'content': chunk, 'type': chunk_type})}\n\n"
-
-            logger.info(f"[API] stream complete, response={len(full_response)} chars")
-        finally:
-            producer.cancel()
-            yield f"data: {json.dumps({'done': True})}\n\n"
-            if full_response.strip():
-                await asyncio.to_thread(_save_message, "assistant", full_response)
-            else:
-                logger.warning("[API] stream ended with empty response — assistant message not saved")
-
-        if audio_mode and full_response.strip():
-            try:
-                audio_bytes = Servitor.generate_audio(full_response)
-                Servitor.send_audio_bytes(audio_bytes)
-            except Exception as e:
-                logger.error(f"[API] audio generation error: {e}", exc_info=DEBUG)
+        except GeneratorExit:
+            logger.info("[API] client disconnected — producer continues in background")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
