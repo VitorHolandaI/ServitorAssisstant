@@ -16,6 +16,10 @@ from mcp_module.stremable_http.client2 import llm_mcp_client
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
+# lfm2.5-thinking:latest has 32K token context window.
+# Reserve 4K for system prompt + response; ~28K for history ≈ 112K chars.
+MAX_HISTORY_CHARS = 112_000
+
 load_dotenv()
 voice_path = os.getenv('VOICE_PATH')
 print(voice_path)
@@ -54,11 +58,33 @@ class ServitorServer:
 
         agent_mcp = llm_mcp_client(
             mcp_addresses=["http://localhost:8001/mcp"],
-            model_name="llama3.2:1b",
+            model_name="lfm2.5-thinking:latest",
             model_address="http://127.0.0.1:11434",
             system_prompt=self.base_prompt
         )
         self.agent = agent_mcp
+
+    def _load_history(self) -> list:
+        """Load conversation history from DB, truncated to MAX_HISTORY_CHARS."""
+        if not DB_PATH.exists():
+            return []
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        conn.close()
+
+        rows = list(reversed(rows))
+        history = []
+        total_chars = 0
+        for row in reversed(rows):
+            entry_chars = len(row["content"]) + len(row["created_at"]) + 20
+            if total_chars + entry_chars > MAX_HISTORY_CHARS:
+                break
+            history.insert(0, (row["role"], row["content"], row["created_at"]))
+            total_chars += entry_chars
+        return history
 
     def get_prompt_with_time(self):
         now = datetime.datetime.now()
@@ -75,8 +101,8 @@ class ServitorServer:
         :param talk: a string with query of the user.
         """
         print(f"this was the phrase {talk}")
-        # nao tem custom message ainda
-        response = await self.agent.get_response(talk, system_prompt=self.get_prompt_with_time())
+        history = self._load_history()
+        response = await self.agent.get_response(talk, history=history, system_prompt=self.get_prompt_with_time())
 
         # not the best thing here refact refact refact
         responeString = ""
@@ -94,8 +120,9 @@ class ServitorServer:
         print(f"this was the phrase (stream) {talk}")
         inside_think = False
         buffer = ""
+        history = self._load_history()
 
-        async for chunk in self.agent.get_response_stream(talk, system_prompt=self.get_prompt_with_time()):
+        async for chunk in self.agent.get_response_stream(talk, history=history, system_prompt=self.get_prompt_with_time()):
             buffer += chunk
 
             while buffer:

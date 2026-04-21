@@ -4,8 +4,21 @@ from mcp import ClientSession
 from langchain_ollama import ChatOllama
 from langchain.agents import create_agent
 from langchain.messages import ToolMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage as CoreAIMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from mcp.client.streamable_http import streamablehttp_client
+
+
+def _build_messages(message: str, history: list | None) -> list:
+    """Build LangChain message list from history + current message."""
+    msgs = []
+    for role, content, created_at in (history or []):
+        if role == "user":
+            msgs.append(HumanMessage(content=f"[{created_at}] {content}"))
+        else:
+            msgs.append(CoreAIMessage(content=f"[{created_at}] {content}"))
+    msgs.append(HumanMessage(content=message))
+    return msgs
 
 
 class llm_mcp_client():
@@ -15,7 +28,7 @@ class llm_mcp_client():
         self.model_address = model_address
         self.prompt = system_prompt
 
-    async def get_response(self, message, system_prompt=None):
+    async def get_response(self, message, history=None, system_prompt=None):
         all_tools = []
         async with contextlib.AsyncExitStack() as stack:
             clients = [await stack.enter_async_context(streamablehttp_client(addr)) for addr in self.mcp_addresses]
@@ -30,7 +43,8 @@ class llm_mcp_client():
             prompt = system_prompt or self.prompt
             agent = create_agent(llm, all_tools, system_prompt=prompt)
             try:
-                response = await agent.ainvoke({"messages": message})
+                msgs = _build_messages(message, history)
+                response = await agent.ainvoke({"messages": msgs})
 
                 tool_calls_used = []
                 for msg in response["messages"]:
@@ -48,7 +62,7 @@ class llm_mcp_client():
                 print(f"Model was not able to be called with message the error was {error}")
                 return None
 
-    async def get_response_stream(self, message, system_prompt=None):
+    async def get_response_stream(self, message, history=None, system_prompt=None):
         all_tools = []
         async with contextlib.AsyncExitStack() as stack:
             clients = [await stack.enter_async_context(streamablehttp_client(addr)) for addr in self.mcp_addresses]
@@ -63,8 +77,9 @@ class llm_mcp_client():
             prompt = system_prompt or self.prompt
             agent = create_agent(llm, all_tools, system_prompt=prompt)
             try:
+                msgs = _build_messages(message, history)
                 text_buffer = ""
-                async for event in agent.astream_events({"messages": message}, version="v2"):
+                async for event in agent.astream_events({"messages": msgs}, version="v2"):
                     event_type = event["event"]
 
                     if event_type == "on_chat_model_stream":

@@ -45,6 +45,17 @@ const App: React.FC = () => {
 			.catch(() => {});
 	}, []);
 
+	const handleClearConversation = async () => {
+		const apiBase = import.meta.env.VITE_REACT_APP_API_URL_AUDIO;
+		await fetch(`${apiBase}/conversation`, { method: 'DELETE' }).catch(() => {});
+		setMessages([{
+			id: Date.now().toString(),
+			text: 'Hello! How can I help you today?',
+			sender: 'bot',
+			timestamp: new Date(),
+		}]);
+	};
+
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 	};
@@ -179,6 +190,9 @@ const App: React.FC = () => {
 					/>
 					<button type="submit" disabled={isLoading || !inputValue.trim()}>
 						Send
+					</button>
+					<button type="button" onClick={handleClearConversation} disabled={isLoading}>
+						New Conversation
 					</button>
 					<input
 						type="checkbox"

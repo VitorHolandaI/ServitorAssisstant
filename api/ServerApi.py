@@ -101,6 +101,16 @@ async def get_conversation(limit: int = 100):
     return {"messages": [dict(r) for r in reversed(rows)]}
 
 
+@app.delete("/conversation")
+async def clear_conversation():
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+        conn.close()
+    return {"status": "cleared"}
+
+
 @app.get("/check_reminders")
 async def check_reminders():
     reminded = await Servitor.check_due_reminders()
