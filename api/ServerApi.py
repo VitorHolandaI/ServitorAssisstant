@@ -61,6 +61,9 @@ def _save_message(role: str, content: str):
         logger.error(f"[API] _save_message error: {e}", exc_info=DEBUG)
 
 
+Servitor: ServitorServer | None = None
+
+
 async def _reminder_loop():
     while True:
         await asyncio.sleep(60)
@@ -72,7 +75,9 @@ async def _reminder_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global Servitor
     _ensure_messages_table()
+    Servitor = ServitorServer("ServitorServer", CLIENT_IP)
     task = asyncio.create_task(_reminder_loop())
     yield
     task.cancel()
@@ -87,9 +92,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-Servitor = ServitorServer("ServitorServer", CLIENT_IP)
 
 
 @app.post("/receive_message")
@@ -108,16 +110,41 @@ async def stream_message(data: Dict[str, Any]):
     async def event_generator():
         await asyncio.to_thread(_save_message, "user", message)
         full_response = ""
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def produce():
+            try:
+                async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                    await queue.put((chunk_type, chunk))
+            except Exception as e:
+                logger.error(f"[API] stream error: {e}", exc_info=DEBUG)
+                await queue.put(("error", str(e)))
+            finally:
+                await queue.put(None)
+
+        producer = asyncio.create_task(produce())
         try:
-            async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+
+                if item is None:
+                    break
+
+                chunk_type, chunk = item
+                if chunk_type == "error":
+                    yield f"data: {json.dumps({'error': chunk, 'type': 'error'})}\n\n"
+                    break
                 if chunk_type == "text":
                     full_response += chunk
                 yield f"data: {json.dumps({'content': chunk, 'type': chunk_type})}\n\n"
+
             logger.info(f"[API] stream complete, response={len(full_response)} chars")
-        except Exception as e:
-            logger.error(f"[API] stream error: {e}", exc_info=DEBUG)
-            yield f"data: {json.dumps({'error': str(e), 'type': 'error'})}\n\n"
         finally:
+            producer.cancel()
             yield f"data: {json.dumps({'done': True})}\n\n"
             if full_response.strip():
                 await asyncio.to_thread(_save_message, "assistant", full_response)
