@@ -20,9 +20,11 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 # Reserve 4K for system prompt + response; ~28K for history ≈ 112K chars.
 MAX_HISTORY_CHARS = 112_000
 
-load_dotenv()
-voice_path = os.getenv('VOICE_PATH')
-print(voice_path)
+load_dotenv(Path(__file__).parent.parent / ".env")
+voice_path = os.getenv("VOICE_PATH")
+server_ip = os.getenv("SERVER_IP", "localhost")
+MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
+print(f"[Server] voice={voice_path}  mcp={MCP_ADDRESS}")
 
 
 class ServitorServer:
@@ -57,7 +59,7 @@ class ServitorServer:
         )
 
         agent_mcp = llm_mcp_client(
-            mcp_addresses=["http://localhost:8001/mcp"],
+            mcp_addresses=[MCP_ADDRESS],
             model_name="lfm2.5-thinking:latest",
             model_address="http://127.0.0.1:11434",
             system_prompt=self.base_prompt

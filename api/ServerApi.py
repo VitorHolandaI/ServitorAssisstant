@@ -2,8 +2,10 @@ import json
 import asyncio
 import sqlite3
 import datetime
+import os
 from pathlib import Path
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, UploadFile
 from typing import Dict, Any
@@ -13,7 +15,10 @@ from fastapi.responses import StreamingResponse
 
 import uvicorn
 
+load_dotenv(Path(__file__).parent / ".env")
+
 DB_PATH = Path(__file__).parent.parent / "data" / "tasks.db"
+CLIENT_IP = os.getenv("CLIENT_IP", "192.168.0.22")
 
 
 def _save_message(role: str, content: str):
@@ -54,7 +59,7 @@ app.add_middleware(
 )
 
 
-Servitor = ServitorServer("ServitorServer", "192.168.0.22")
+Servitor = ServitorServer("ServitorServer", CLIENT_IP)
 
 
 @app.post("/receive_message")

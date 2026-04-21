@@ -2,6 +2,9 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
 
+const API_BASE = `http://${import.meta.env.VITE_SERVER_IP}:8000`;
+const API_STREAM = `${API_BASE}/stream_message`;
+
 interface Message {
 	id: string;
 	text: string;
@@ -28,7 +31,7 @@ const App: React.FC = () => {
 	};
 
 	useEffect(() => {
-		const apiBase = import.meta.env.VITE_REACT_APP_API_URL_AUDIO;
+		const apiBase = API_BASE;
 		fetch(`${apiBase}/conversation`)
 			.then(r => r.json())
 			.then(data => {
@@ -46,7 +49,7 @@ const App: React.FC = () => {
 	}, []);
 
 	const handleClearConversation = async () => {
-		const apiBase = import.meta.env.VITE_REACT_APP_API_URL_AUDIO;
+		const apiBase = API_BASE;
 		await fetch(`${apiBase}/conversation`, { method: 'DELETE' }).catch(() => {});
 		setMessages([{
 			id: Date.now().toString(),
@@ -85,7 +88,7 @@ const App: React.FC = () => {
 
 		try {
 			// Always use streaming - audio flag tells backend to also generate TTS
-			const apiUrl = import.meta.env.VITE_REACT_APP_API_URL_STREAM;
+			const apiUrl = API_STREAM;
 			const response = await fetch(apiUrl, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
