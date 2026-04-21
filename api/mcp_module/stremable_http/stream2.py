@@ -5,11 +5,16 @@ from retry_requests import retry
 import pandas as pd
 import sqlite3
 import datetime
+import os
+import subprocess
 from pathlib import Path
+from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "tasks.db"
 DB_PATH.parent.mkdir(exist_ok=True)
+
+load_dotenv(Path(__file__).parent.parent.parent / ".env.dev")
 
 mcp = FastMCP("GeneralAssistant", host="0.0.0.0", port=8001, stateless_http=True)
 
@@ -406,6 +411,29 @@ async def delete_task(task_id: int) -> str:
         if cursor.rowcount == 0:
             return f"Task with ID {task_id} not found."
         return f"Task {task_id} deleted."
+
+
+@mcp.tool()
+async def wake_on_lan() -> str:
+    """Send a Wake-on-LAN magic packet to wake up the configured machine."""
+    mac = os.getenv("WAKE_MAC")
+    interface = os.getenv("WAKE_INTERFACE", "vmbr0")
+    if not mac:
+        return "Error: WAKE_MAC not set in api/.env.dev"
+    try:
+        result = subprocess.run(
+            ["etherwake", "-i", interface, mac],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            return f"Wake-on-LAN packet sent to {mac} via {interface}."
+        return f"etherwake failed (exit {result.returncode}): {result.stderr.strip()}"
+    except FileNotFoundError:
+        return "Error: etherwake not found. Install with: apt install etherwake"
+    except subprocess.TimeoutExpired:
+        return "Error: etherwake timed out."
+    except Exception as e:
+        return f"Error: {e}"
 
 
 if __name__ == "__main__":
