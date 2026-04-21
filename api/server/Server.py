@@ -54,7 +54,10 @@ class ServitorServer:
             "You are like a magos from a library from the imperium and answer all questions. "
             "When the user asks to create a task with a relative time like 'today', 'tomorrow', "
             "'at 5pm', you MUST use the current date/time provided below to calculate the exact "
-            "due_at value in 'YYYY-MM-DD HH:MM:SS' format."
+            "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
+            "When the user asks about weather and does NOT specify a location, ALWAYS call "
+            "get_forecast() with NO arguments — the default location is Campina Grande, Paraíba, Brazil. "
+            "NEVER ask the user for coordinates or location when calling get_forecast."
         )
 
         agent_mcp = llm_mcp_client(
