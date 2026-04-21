@@ -1,4 +1,12 @@
 import json
+import asyncio
+import logging
+import sqlite3
+import datetime
+import os
+from pathlib import Path
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, UploadFile
 from typing import Dict, Any
@@ -7,18 +15,83 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import uvicorn
-app = FastAPI()
+
+load_dotenv(Path(__file__).parent / ".env")
+
+DB_PATH = Path(__file__).parent.parent / "data" / "tasks.db"
+CLIENT_IP = os.getenv("CLIENT_IP", "192.168.0.22")
+DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+def _ensure_messages_table():
+    """Create messages table if MCP server hasn't run init_db yet."""
+    if not DB_PATH.exists():
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at DATETIME NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def _save_message(role: str, content: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
+            (role, content, now)
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"[API] saved message role={role} len={len(content)}")
+    except Exception as e:
+        logger.error(f"[API] _save_message error: {e}", exc_info=DEBUG)
+
+
+Servitor: ServitorServer | None = None
+
+
+async def _reminder_loop():
+    while True:
+        await asyncio.sleep(60)
+        try:
+            await Servitor.check_due_reminders()
+        except Exception as e:
+            logger.error(f"[API] reminder loop error: {e}", exc_info=DEBUG)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global Servitor
+    _ensure_messages_table()
+    Servitor = ServitorServer("ServitorServer", CLIENT_IP)
+    task = asyncio.create_task(_reminder_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-
-Servitor = ServitorServer("ServitorServer", "192.168.0.22")
 
 
 @app.post("/receive_message")
@@ -32,19 +105,88 @@ async def receive_text(data: Dict[str, Any]):
 async def stream_message(data: Dict[str, Any]):
     message = data.get("message", "No message provided")
     audio_mode = data.get("audio", False)
+    logger.info(f"[API] stream_message: {message[:80]!r} audio={audio_mode}")
+
+    await asyncio.to_thread(_save_message, "user", message)
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def produce():
+        """Runs as independent background task — survives client disconnect."""
+        full_response = ""
+        try:
+            async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                await queue.put((chunk_type, chunk))
+                if chunk_type == "text":
+                    full_response += chunk
+        except Exception as e:
+            logger.error(f"[API] producer error: {e}", exc_info=DEBUG)
+            await queue.put(("error", str(e)))
+        finally:
+            await queue.put(None)
+            if full_response.strip():
+                await asyncio.to_thread(_save_message, "assistant", full_response)
+                logger.info(f"[API] assistant saved ({len(full_response)} chars)")
+                if audio_mode:
+                    try:
+                        audio_bytes = Servitor.generate_audio(full_response)
+                        Servitor.send_audio_bytes(audio_bytes)
+                    except Exception as e:
+                        logger.error(f"[API] audio error: {e}", exc_info=DEBUG)
+            else:
+                logger.warning("[API] producer finished with empty response — not saved")
+
+    asyncio.create_task(produce())
 
     async def event_generator():
-        full_response = ""
-        async for chunk in Servitor.process_ollama_stream(message):
-            full_response += chunk
-            yield f"data: {json.dumps({'content': chunk})}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
+        """SSE stream to client. Stops on disconnect; producer keeps running."""
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
 
-        if audio_mode and full_response.strip():
-            audio_bytes = Servitor.generate_audio(full_response)
-            Servitor.send_audio_bytes(audio_bytes)
+                if item is None:
+                    yield f"data: {json.dumps({'done': True})}\n\n"
+                    break
+
+                chunk_type, chunk = item
+                if chunk_type == "error":
+                    yield f"data: {json.dumps({'error': chunk, 'type': 'error'})}\n\n"
+                    yield f"data: {json.dumps({'done': True})}\n\n"
+                    break
+                yield f"data: {json.dumps({'content': chunk, 'type': chunk_type})}\n\n"
+        except GeneratorExit:
+            logger.info("[API] client disconnected — producer continues in background")
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@app.get("/conversation")
+async def get_conversation(limit: int = 100):
+    if not DB_PATH.exists():
+        return {"messages": []}
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return {"messages": [dict(r) for r in reversed(rows)]}
+
+
+@app.delete("/conversation")
+async def clear_conversation():
+    if DB_PATH.exists():
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+        conn.close()
+    logger.info("[API] conversation cleared")
+    return {"status": "cleared"}
 
 
 @app.get("/check_reminders")
@@ -55,14 +197,14 @@ async def check_reminders():
 
 @app.post("/file_recorded")
 async def create_upload_file(my_file: UploadFile):
-    print(my_file.filename)
+    logger.info(f"[API] file_recorded: {my_file.filename}")
     file = my_file.file
     audio_bytes = await Servitor.process_audio(file)
     if audio_bytes is None:
         return {"status": "ignored", "reason": "short or noise input"}
     Servitor.send_audio_bytes(audio_bytes)
-    return {"filename": my_file}
+    return {"filename": my_file.filename}
 
 
 if __name__ == "__main__":
-    uvicorn.run("ServerApi:app", host="0.0.0.0", port=8000, log_level="debug")
+    uvicorn.run("ServerApi:app", host="0.0.0.0", port=8000, log_level="debug" if DEBUG else "info")

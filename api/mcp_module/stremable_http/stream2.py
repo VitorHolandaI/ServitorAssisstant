@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "tasks.db"
 DB_PATH.parent.mkdir(exist_ok=True)
 
-mcp = FastMCP("GeneralAssistant")
+mcp = FastMCP("GeneralAssistant", host="0.0.0.0", port=8001, stateless_http=True)
 
 
 # ── SQLite helpers ──────────────────────────────────────────────
@@ -37,6 +37,14 @@ def init_db():
                 recurrence_day_of_week INTEGER,
                 recurrence_day_of_month INTEGER,
                 timezone TEXT DEFAULT 'America/Recife'
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at DATETIME NOT NULL
             )
         """)
         conn.commit()
@@ -401,4 +409,4 @@ async def delete_task(task_id: int) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8001)
+    mcp.run(transport="streamable-http")

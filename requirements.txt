@@ -148,3 +148,16 @@ werkzeug==3.1.6
 wheel==0.46.2
 wrapt==2.0.1
 yarl==1.22.0
+langchain
+langchain-mcp-adapters
+langchain-ollama
+langgraph
+mcp
+openmeteo-requests
+piper-tts
+python-dotenv==1.0.1
+requests-cache
+retry-requests
+torch==2.8.0
+torchaudio==2.8.0
+urllib3==2.6.3
