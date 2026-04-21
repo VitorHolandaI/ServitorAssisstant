@@ -109,13 +109,14 @@ async def stream_message(data: Dict[str, Any]):
         await asyncio.to_thread(_save_message, "user", message)
         full_response = ""
         try:
-            async for chunk in Servitor.process_ollama_stream(message):
-                full_response += chunk
-                yield f"data: {json.dumps({'content': chunk})}\n\n"
+            async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                if chunk_type == "text":
+                    full_response += chunk
+                yield f"data: {json.dumps({'content': chunk, 'type': chunk_type})}\n\n"
             logger.info(f"[API] stream complete, response={len(full_response)} chars")
         except Exception as e:
             logger.error(f"[API] stream error: {e}", exc_info=DEBUG)
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'error': str(e), 'type': 'error'})}\n\n"
         finally:
             yield f"data: {json.dumps({'done': True})}\n\n"
             if full_response.strip():

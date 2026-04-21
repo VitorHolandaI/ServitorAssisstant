@@ -119,8 +119,12 @@ class ServitorServer:
             return "Some error occurred"
 
     async def process_ollama_stream(self, talk: str):
+        """Yields (type, content) tuples where type is 'thinking' or 'text'."""
         logger.info(f"[Server] process_ollama_stream: {talk[:80]!r}")
-        inside_think = False
+
+        THINKING_START = "Thinking..."
+        THINKING_END = "...done thinking."
+        inside_thinking = False
         buffer = ""
         history = self._load_history()
 
@@ -128,28 +132,35 @@ class ServitorServer:
             async for chunk in self.agent.get_response_stream(talk, history=history, system_prompt=self.get_prompt_with_time()):
                 buffer += chunk
 
-                while buffer:
-                    if inside_think:
-                        end_idx = buffer.find("</think>")
-                        if end_idx != -1:
-                            buffer = buffer[end_idx + len("</think>"):]
-                            inside_think = False
-                            if buffer.startswith("\n"):
-                                buffer = buffer[1:]
-                        else:
-                            break
+                if not inside_thinking:
+                    if THINKING_START in buffer:
+                        idx = buffer.index(THINKING_START)
+                        before = buffer[:idx]
+                        if before.strip():
+                            yield ("text", before)
+                        buffer = buffer[idx + len(THINKING_START):].lstrip("\n")
+                        inside_thinking = True
                     else:
-                        start_idx = buffer.find("<think>")
-                        if start_idx != -1:
-                            if start_idx > 0:
-                                yield buffer[:start_idx]
-                            buffer = buffer[start_idx + len("<think>"):]
-                            inside_think = True
-                        else:
-                            if "<" in buffer and not buffer.endswith(">"):
-                                break
-                            yield buffer
-                            buffer = ""
+                        safe = len(buffer) - len(THINKING_START)
+                        if safe > 0:
+                            yield ("text", buffer[:safe])
+                            buffer = buffer[safe:]
+                else:
+                    if THINKING_END in buffer:
+                        idx = buffer.index(THINKING_END)
+                        if idx > 0:
+                            yield ("thinking", buffer[:idx])
+                        buffer = buffer[idx + len(THINKING_END):].lstrip("\n")
+                        inside_thinking = False
+                    else:
+                        safe = len(buffer) - len(THINKING_END)
+                        if safe > 0:
+                            yield ("thinking", buffer[:safe])
+                            buffer = buffer[safe:]
+
+            if buffer.strip():
+                yield ("thinking" if inside_thinking else "text", buffer)
+
         except Exception as e:
             logger.error(f"[Server] process_ollama_stream error: {e}", exc_info=DEBUG)
             raise
