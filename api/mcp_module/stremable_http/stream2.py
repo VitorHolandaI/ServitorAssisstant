@@ -39,6 +39,14 @@ def init_db():
                 timezone TEXT DEFAULT 'America/Recife'
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """)
         conn.commit()
 
 

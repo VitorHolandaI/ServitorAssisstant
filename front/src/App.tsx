@@ -27,6 +27,24 @@ const App: React.FC = () => {
 		setIsAudio(!isAudio);
 	};
 
+	useEffect(() => {
+		const apiBase = import.meta.env.VITE_REACT_APP_API_URL_AUDIO;
+		fetch(`${apiBase}/conversation`)
+			.then(r => r.json())
+			.then(data => {
+				if (data.messages && data.messages.length > 0) {
+					const loaded: Message[] = data.messages.map((m: { role: string; content: string; created_at: string }) => ({
+						id: m.created_at + m.role,
+						text: m.content,
+						sender: m.role === 'user' ? 'user' : 'bot',
+						timestamp: new Date(m.created_at),
+					}));
+					setMessages(loaded);
+				}
+			})
+			.catch(() => {});
+	}, []);
+
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 	};
