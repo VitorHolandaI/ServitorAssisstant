@@ -57,12 +57,40 @@ The producer task runs independently — if the browser disconnects mid-stream t
 
 ### stream2.py — MCP tool server
 Tools exposed to the LLM:
-| Tool | What it does |
+**Weather**
+| Tool | Description |
 |------|-------------|
-| `get_forecast` | Weather for Campina Grande (default) or any coords |
-| `create_task` / `list_tasks` / `complete_task` … | Task manager backed by SQLite |
-| `wake_on_lan` | Sends WoL magic packet to `WAKE_MAC` |
-| `add/subtract/multiply/divide_numbers` | Math |
+| `get_forecast` | Current weather. No args = Campina Grande. Pass `latitude`/`longitude` for another city. |
+
+**Tasks** — all backed by SQLite (`data/tasks.db`)
+| Tool | Description |
+|------|-------------|
+| `create_task` | New task with optional `due_at`, recurrence, timezone |
+| `list_tasks` | List pending tasks (pass `show_completed=true` for all) |
+| `get_task` | Single task by ID |
+| `update_task` | Update any field of an existing task |
+| `complete_task` | Mark done; auto-creates next occurrence if recurring |
+| `delete_task` | Permanently delete a task |
+
+**System**
+| Tool | Description |
+|------|-------------|
+| `wake_on_lan` | Sends WoL magic packet to `WAKE_MAC` via UDP broadcast |
+
+**Math**
+| Tool | Description |
+|------|-------------|
+| `add_numbers` | `a + b` |
+| `subtract_numbers` | `a - b` |
+| `multiply_numbers` | `a × b` |
+| `divide_numbers` | `a ÷ b` (errors on zero) |
+
+**Meta**
+| Tool | Description |
+|------|-------------|
+| `help` | Full tool reference |
+| `task_help` | Task-specific reference with examples |
+| `default_response` | Fallback when no tool matches — tells model to answer directly |
 
 ### client2.py — LangChain agent
 - Connects to the MCP server via streamable HTTP
