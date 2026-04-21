@@ -1,27 +1,16 @@
-# Running ServitorAssistant with Docker
+# Docker Setup
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/) 24+
-- [Docker Compose](https://docs.docker.com/compose/install/) v2 (included with Docker Desktop)
-- A Piper TTS voice model file (`.onnx` + `.onnx.json`)
-- ~10 GB free disk space (Python deps + Ollama model)
+- Docker 24+ with Compose v2
+- A Piper TTS voice model (`.onnx` + `.onnx.json`)
+- ~10 GB free disk space
 
 ---
 
-## 1. Clone and enter the repo
+## 1. Add your voice model
 
-```bash
-git clone <repo-url>
-cd ServitorAssisstant
-git checkout feat/docker-containerization
-```
-
----
-
-## 2. Add your voice model
-
-Place your Piper voice model files inside `voice_models/`:
+Drop the files into `voice_models/`:
 
 ```
 voice_models/
@@ -29,153 +18,105 @@ voice_models/
   en_US-ryan-medium.onnx.json
 ```
 
-> Download models from https://huggingface.co/rhasspy/piper-voices
+Download models at https://huggingface.co/rhasspy/piper-voices
 
 ---
 
-## 3. Configure environment (optional)
-
-The only value you may want to override is the Raspberry Pi client IP (for audio playback). Create a `.env` file at the project root:
+## 2. Configure
 
 ```bash
-# .env  (project root — read by docker compose)
-CLIENT_IP=192.168.0.22   # IP of your Raspberry Pi; omit if not using audio mode
-HTTP_PORT=80             # Host port for the web UI (default: 80)
+cp api/.env.example api/.env
 ```
 
-Everything else (Ollama address, MCP address, API base URL) is wired automatically between containers.
+Edit `api/.env` — minimum required values:
+
+```env
+VOICE_PATH=/app/voice_models/en_US-ryan-medium.onnx
+WAKE_MAC=your:mac:here        # only if using Wake-on-LAN
+CLIENT_IP=192.168.0.22        # only if using audio mode (Raspberry Pi)
+```
+
+Everything else (Ollama URL, MCP address) is wired automatically between containers.
 
 ---
 
-## 4. Build and start
+## 3. Build and start
 
 ```bash
 docker compose up --build
 ```
 
-The **first run** takes longer because:
+First run is slow — Docker builds the Python image (torch is large) and Ollama downloads `lfm2.5-thinking:latest` (~8 GB). Subsequent starts are fast.
 
-1. Docker builds the Python image (~several minutes, torch is large)
-2. The Ollama container downloads `lfm2.5-thinking:latest` (~8 GB)
+Wait for:
+```
+[ollama] model ready
+INFO:     Application startup complete.
+```
 
-Subsequent starts skip both steps (layers and model are cached).
+Then open **http://localhost**.
 
 ---
 
-## 5. Open the UI
+## Services
 
-Once you see `[ollama] model ready` and the backend logs `Application startup complete`, open:
-
-```
-http://localhost
-```
-
-(or `http://<server-ip>` if accessing from another device on the LAN)
-
----
-
-## Services overview
-
-| Service  | What it does                                      | Internal port |
-|----------|---------------------------------------------------|---------------|
-| `nginx`  | Serves the React UI; proxies `/api/*` to backend  | 80 (→ host)   |
-| `backend`| FastAPI server (LLM agent, TTS, conversation DB)  | 8000          |
-| `mcp`    | FastMCP tool server (weather, tasks, math)        | 8001          |
-| `ollama` | Ollama inference server + model storage           | 11434         |
+| Service  | Role | Internal port |
+|----------|------|---------------|
+| `nginx`  | Serves the UI; proxies `/api/*` to backend | 80 |
+| `backend`| FastAPI + LLM agent + TTS | 8000 |
+| `mcp`    | MCP tool server (weather, tasks, WoL) | 8001 |
+| `ollama` | Ollama inference + model storage | 11434 |
 
 ---
 
 ## Persistent data
 
-| Volume       | Contents                                  |
-|--------------|-------------------------------------------|
-| `ollama-data`| Ollama models — survives `docker compose down` |
-| `app-data`   | SQLite DB (`tasks.db`) — conversation history and tasks |
+| Volume | Contents |
+|--------|---------|
+| `ollama-data` | Ollama models |
+| `app-data` | SQLite DB (tasks + conversation history) |
 
-> `docker compose down` stops containers but **keeps both volumes**.
-> To wipe everything including the model: `docker compose down -v`
+`docker compose down` stops containers but keeps volumes. To wipe everything including the model:
+
+```bash
+docker compose down -v
+```
 
 ---
 
 ## Useful commands
 
 ```bash
-# Start in background
+# Run in background
 docker compose up -d --build
 
-# Follow logs for all services
+# Follow logs
 docker compose logs -f
 
-# Follow only backend logs
-docker compose logs -f backend
-
-# Restart a single service (e.g. after editing backend code)
+# Rebuild only one service
 docker compose up -d --build backend
 
-# Stop everything (keep volumes)
+# Stop (keep data)
 docker compose down
-
-# Stop and delete all data including the Ollama model
-docker compose down -v
 ```
 
 ---
 
-## Enabling debug logging
+## Changing the port
 
-Set `DEBUG=true` for the backend service in your `.env`:
+Add to a `.env` file at the project root:
 
-```bash
-DEBUG=true
-```
-
-Then restart:
-
-```bash
-docker compose up -d backend
-```
-
----
-
-## Audio mode (Raspberry Pi)
-
-Audio mode sends TTS audio to your Raspberry Pi. Make sure:
-
-1. `CLIENT_IP` is set to your Pi's IP in `.env`
-2. The Pi is running `api/ClientApi.py` on port `8000`
-
-The backend container sends audio over HTTP to `CLIENT_IP:8000/play_file` — the Pi must be reachable from the host network. Since the backend container uses `network_mode: bridge` (default), the Pi IP must be routable from the Docker host.
-
----
-
-## Changing the Ollama model
-
-Edit `docker-compose.yml` and set the `OLLAMA_MODEL` environment variable on the `ollama` service:
-
-```yaml
-ollama:
-  environment:
-    OLLAMA_MODEL: llama3.2:latest
-```
-
-Also update `model_name` in `api/server/Server.py` to match, then rebuild:
-
-```bash
-docker compose up -d --build backend
+```env
+HTTP_PORT=8080
 ```
 
 ---
 
 ## Troubleshooting
 
-**Backend fails to start with `VOICE_PATH not set`**
-→ The `voice_models/` directory is not mounted or the `.onnx` file is missing. Check `docker compose logs backend`.
-
-**`ollama` healthcheck keeps failing**
-→ Model download is in progress. Run `docker compose logs ollama` to watch the pull. Wait for `model ready` before expecting responses.
-
-**Frontend shows `Sorry, I encountered an error`**
-→ Backend or MCP is not ready yet. Check `docker compose logs backend mcp` and wait for startup to complete.
-
-**Port 80 already in use**
-→ Set `HTTP_PORT=8080` (or any free port) in `.env`, then `docker compose up -d`.
+| Symptom | Fix |
+|---------|-----|
+| `VOICE_PATH not set` | Check `api/.env` has `VOICE_PATH` and `voice_models/` is populated |
+| Ollama healthcheck failing | Model is still downloading — `docker compose logs ollama` to watch |
+| `Sorry, I encountered an error` | Backend/MCP not ready yet — wait and retry |
+| Port 80 in use | Set `HTTP_PORT=8080` in `.env` |
