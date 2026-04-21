@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
 
-const API_BASE = `http://${import.meta.env.VITE_SERVER_IP}:8000`;
+const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${import.meta.env.VITE_SERVER_IP}:8000`;
 const API_STREAM = `${API_BASE}/stream_message`;
 
 interface Message {

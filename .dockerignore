@@ -1,0 +1,16 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/*.egg-info
+.git
+.gitignore
+logs/
+data/
+front/node_modules
+front/dist
+*.md
+docs/
+uv.lock
+api/.env
+front/.env

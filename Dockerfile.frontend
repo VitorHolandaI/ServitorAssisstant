@@ -1,0 +1,20 @@
+FROM node:20-slim AS builder
+
+WORKDIR /app
+
+COPY front/package*.json ./
+RUN npm ci
+
+COPY front/ ./
+
+# VITE_API_BASE=/api makes all API calls go through nginx
+ARG VITE_API_BASE=/api
+ENV VITE_API_BASE=$VITE_API_BASE
+
+RUN npm run build
+
+# ── serve static files with nginx ──────────────────────────────
+FROM nginx:alpine
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf

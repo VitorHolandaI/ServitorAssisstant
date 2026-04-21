@@ -60,10 +60,11 @@ class ServitorServer:
             "NEVER ask the user for coordinates or location when calling get_forecast."
         )
 
+        ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
             mcp_addresses=[MCP_ADDRESS],
             model_name="lfm2.5-thinking:latest",
-            model_address="http://127.0.0.1:11434",
+            model_address=ollama_host,
             system_prompt=self.base_prompt
         )
         self.agent = agent_mcp
