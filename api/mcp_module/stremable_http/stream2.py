@@ -143,7 +143,7 @@ async def divide_numbers(a: float, b: float):
 
 @mcp.tool()
 async def get_forecast(latitude: float = -7.23071810, longitude: float = -35.88166640) -> str:
-    """Get weather forecast for Campina Grande."""
+    """Get weather forecast. Call with NO arguments for Campina Grande, Paraíba (default location). Only pass coordinates if the user explicitly asks about a different city."""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": latitude,
