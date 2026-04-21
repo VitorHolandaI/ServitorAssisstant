@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "tasks.db"
 DB_PATH.parent.mkdir(exist_ok=True)
 
-mcp = FastMCP("GeneralAssistant")
+mcp = FastMCP("GeneralAssistant", host="0.0.0.0", port=8001)
 
 
 # ── SQLite helpers ──────────────────────────────────────────────
@@ -409,4 +409,4 @@ async def delete_task(task_id: int) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8001)
+    mcp.run(transport="streamable-http")
