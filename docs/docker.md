@@ -10,15 +10,21 @@
 
 ## 1. Add your voice model
 
-Drop the files into `voice_models/`:
+Download both files into `voice_models/` (the `.json` config is required alongside the `.onnx`):
 
+```bash
+wget -P voice_models/ https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx
+wget -P voice_models/ https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/medium/en_US-ryan-medium.onnx.json
+```
+
+Result:
 ```
 voice_models/
   en_US-ryan-medium.onnx
   en_US-ryan-medium.onnx.json
 ```
 
-Download models at https://huggingface.co/rhasspy/piper-voices
+> Other voices available at https://huggingface.co/rhasspy/piper-voices — update `VOICE_PATH` in `api/.env` to match.
 
 ---
 
