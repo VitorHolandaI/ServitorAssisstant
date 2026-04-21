@@ -5,3 +5,5 @@ en/
 __pycache__/
 logs/
 data/
+api/.env.dev
+api/.env
