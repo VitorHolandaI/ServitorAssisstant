@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     portaudio19-dev \
     curl \
     git \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
