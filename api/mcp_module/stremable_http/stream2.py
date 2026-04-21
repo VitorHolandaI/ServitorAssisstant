@@ -6,7 +6,7 @@ import pandas as pd
 import sqlite3
 import datetime
 import os
-import subprocess
+import socket
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -415,23 +415,21 @@ async def delete_task(task_id: int) -> str:
 
 @mcp.tool()
 async def wake_on_lan() -> str:
-    """Send a Wake-on-LAN magic packet to wake up the configured machine."""
+    """Send a Wake-on-LAN magic packet to wake up the configured machine. No arguments needed."""
     mac = os.getenv("WAKE_MAC")
-    interface = os.getenv("WAKE_INTERFACE", "vmbr0")
     if not mac:
-        return "Error: WAKE_MAC not set in api/.env.dev"
+        return "Error: WAKE_MAC not set in api/.env"
     try:
-        result = subprocess.run(
-            ["etherwake", "-i", interface, mac],
-            capture_output=True, text=True, timeout=10
-        )
-        if result.returncode == 0:
-            return f"Wake-on-LAN packet sent to {mac} via {interface}."
-        return f"etherwake failed (exit {result.returncode}): {result.stderr.strip()}"
-    except FileNotFoundError:
-        return "Error: etherwake not found. Install with: apt install etherwake"
-    except subprocess.TimeoutExpired:
-        return "Error: etherwake timed out."
+        mac_bytes = bytes.fromhex(mac.replace(":", "").replace("-", ""))
+        if len(mac_bytes) != 6:
+            return f"Error: invalid MAC address format: {mac}"
+        magic = b"\xff" * 6 + mac_bytes * 16
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.connect(("255.255.255.255", 9))
+            sock.send(magic)
+        print(f"[MCP] wake_on_lan: magic packet sent to {mac}")
+        return f"Wake-on-LAN magic packet sent to {mac}."
     except Exception as e:
         return f"Error: {e}"
 
