@@ -51,6 +51,9 @@ const App: React.FC = () => {
 		setInputValue('');
 		setIsLoading(true);
 
+		const abortController = new AbortController();
+		const timeoutId = setTimeout(() => abortController.abort(), 10 * 60 * 1000);
+
 		try {
 			// Always use streaming - audio flag tells backend to also generate TTS
 			const apiUrl = import.meta.env.VITE_REACT_APP_API_URL_STREAM;
@@ -58,6 +61,7 @@ const App: React.FC = () => {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ message: inputValue, audio: isAudio }),
+				signal: abortController.signal,
 			});
 			if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
@@ -104,14 +108,18 @@ const App: React.FC = () => {
 			}
 		} catch (error) {
 			console.error('Error sending message:', error);
+			const isTimeout = error instanceof DOMException && error.name === 'AbortError';
 			const errorMessage: Message = {
 				id: Date.now().toString(),
-				text: 'Sorry, I encountered an error. Please try again.',
+				text: isTimeout
+					? 'Request timed out. The server took too long to respond.'
+					: 'Sorry, I encountered an error. Please try again.',
 				sender: 'bot',
 				timestamp: new Date(),
 			};
 			setMessages(prev => [...prev, errorMessage]);
 		} finally {
+			clearTimeout(timeoutId);
 			setIsLoading(false);
 		}
 	};
