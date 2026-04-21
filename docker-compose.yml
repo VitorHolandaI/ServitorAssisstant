@@ -1,0 +1,58 @@
+services:
+
+  ollama:
+    image: ollama/ollama
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./docker/ollama-entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python mcp_module/stremable_http/stream2.py
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn ServerApi:app --host 0.0.0.0 --port 8000
+    depends_on:
+      mcp:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+    environment:
+      SERVER_IP: mcp
+      OLLAMA_HOST: http://ollama:11434
+      VOICE_PATH: /app/voice_models/en_US-ryan-medium.onnx
+      CLIENT_IP: ${CLIENT_IP:-192.168.0.22}
+    volumes:
+      - app-data:/app/data
+      - ./voice_models:/app/voice_models:ro
+    restart: unless-stopped
+
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ollama-data:
+  app-data:
