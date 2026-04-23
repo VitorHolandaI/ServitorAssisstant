@@ -1,0 +1,5 @@
+samples/
+voice_models/
+*.zip
+__pycache__/
+stage_recorders/output/
