@@ -91,6 +91,10 @@ get_forecast(latitude?, longitude?)
   longitude: float, optional (default -35.8816, Campina Grande)
   Returns: temperature, humidity, rain, wind speed
 
+get_weekly_forecast(latitude?, longitude?)
+  — 7-day daily forecast for Campina Grande (or custom coords)
+  Returns: per-day min/max temp, total rain, max wind
+
 ── TASKS ───────────────────────────────────────────
 create_task(title*, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
   title:                  string, REQUIRED
@@ -148,7 +152,13 @@ async def divide_numbers(a: float, b: float):
 
 @mcp.tool()
 async def get_forecast(latitude: float = -7.23071810, longitude: float = -35.88166640) -> str:
-    """Get weather forecast. Call with NO arguments for Campina Grande, Paraíba (default location). Only pass coordinates if the user explicitly asks about a different city."""
+    """Get current weather forecast.
+
+    DEFAULT LOCATION: Campina Grande, Paraíba, Brazil (latitude=-7.23071810, longitude=-35.88166640).
+    Call with NO arguments for the default location — the defaults are already set.
+    Only pass latitude/longitude if the user explicitly asks about a DIFFERENT city.
+    Do NOT try to infer or look up coordinates for Campina Grande; they are pre-configured.
+    """
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": latitude,
@@ -193,6 +203,48 @@ async def get_forecast(latitude: float = -7.23071810, longitude: float = -35.881
         )
     except Exception as e:
         return f"Unable to fetch weather data: {e}"
+
+
+@mcp.tool()
+async def get_weekly_forecast(latitude: float = -7.23071810, longitude: float = -35.88166640) -> str:
+    """Get 7-day weather forecast (daily min/max temp, rain, max wind).
+
+    DEFAULT LOCATION: Campina Grande, Paraíba, Brazil (latitude=-7.23071810, longitude=-35.88166640).
+    Call with NO arguments for the default location — the defaults are already set.
+    Only pass latitude/longitude if the user explicitly asks about a DIFFERENT city.
+    Do NOT try to infer or look up coordinates for Campina Grande; they are pre-configured.
+    """
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": ["temperature_2m_max", "temperature_2m_min",
+                  "precipitation_sum", "wind_speed_10m_max"],
+        "forecast_days": 7,
+        "timezone": "America/Recife",
+    }
+    try:
+        response = openmeteo.weather_api(url, params=params)[0]
+        daily = response.Daily()
+        tmax = daily.Variables(0).ValuesAsNumpy()
+        tmin = daily.Variables(1).ValuesAsNumpy()
+        rain = daily.Variables(2).ValuesAsNumpy()
+        wind = daily.Variables(3).ValuesAsNumpy()
+        dates = pd.date_range(
+            start=pd.to_datetime(daily.Time(), unit="s", utc=True),
+            end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
+            freq=pd.Timedelta(seconds=daily.Interval()),
+            inclusive="left",
+        )
+        lines = ["Campina Grande, Paraiba - 7-day forecast:"]
+        for d, hi, lo, r, w in zip(dates, tmax, tmin, rain, wind):
+            lines.append(
+                f"{d.strftime('%a %Y-%m-%d')}: "
+                f"{lo:.0f}-{hi:.0f}°C | rain {r:.1f}mm | wind {w:.0f}km/h"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Unable to fetch weekly forecast: {e}"
 
 
 # ── Task tools ──────────────────────────────────────────────────
@@ -250,6 +302,19 @@ async def create_task(
     """
     print(f"[MCP] create_task: {title}")
     with get_db() as conn:
+        # Guard against agent calling create_task twice for the same request.
+        # Model sometimes re-invokes the tool on retry, producing duplicate rows.
+        # Reject only when an *incomplete* task with same title already exists —
+        # completed tasks with the same title are valid (recurring history).
+        existing = conn.execute(
+            "SELECT id FROM tasks WHERE title = ? AND is_completed = 0 LIMIT 1",
+            (title,)
+        ).fetchone()
+        if existing is not None:
+            warning = f"Warning: task with title '{title}' already exists (ID: {existing['id']}). Not created again."
+            print(f"[MCP] {warning}")
+            return warning
+
         created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         cursor = conn.execute(
             """INSERT INTO tasks (title, description, created_at, due_at, recurrence_type,

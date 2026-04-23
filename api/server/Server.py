@@ -126,8 +126,22 @@ class ServitorServer:
         """Yields (type, content) tuples where type is 'thinking' or 'text'."""
         logger.info(f"[Server] process_ollama_stream: {talk[:80]!r}")
 
-        THINKING_START = "Thinking..."
-        THINKING_END = "...done thinking."
+        # Different models emit different markers around chain-of-thought.
+        # Handle both Ollama "Thinking..." prose and raw <think> tags.
+        THINKING_STARTS = ("Thinking...", "<think>")
+        THINKING_ENDS = ("...done thinking.", "</think>")
+        MAX_MARKER = max(len(m) for m in THINKING_STARTS + THINKING_ENDS)
+
+        def _find_first(text: str, markers):
+            best_idx = -1
+            best_marker = None
+            for m in markers:
+                i = text.find(m)
+                if i != -1 and (best_idx == -1 or i < best_idx):
+                    best_idx = i
+                    best_marker = m
+            return best_idx, best_marker
+
         inside_thinking = False
         buffer = ""
         history = self._load_history()
@@ -137,27 +151,27 @@ class ServitorServer:
                 buffer += chunk
 
                 if not inside_thinking:
-                    if THINKING_START in buffer:
-                        idx = buffer.index(THINKING_START)
+                    idx, marker = _find_first(buffer, THINKING_STARTS)
+                    if idx != -1:
                         before = buffer[:idx]
                         if before.strip():
                             yield ("text", before)
-                        buffer = buffer[idx + len(THINKING_START):].lstrip("\n")
+                        buffer = buffer[idx + len(marker):].lstrip("\n")
                         inside_thinking = True
                     else:
-                        safe = len(buffer) - len(THINKING_START)
+                        safe = len(buffer) - MAX_MARKER
                         if safe > 0:
                             yield ("text", buffer[:safe])
                             buffer = buffer[safe:]
                 else:
-                    if THINKING_END in buffer:
-                        idx = buffer.index(THINKING_END)
+                    idx, marker = _find_first(buffer, THINKING_ENDS)
+                    if idx != -1:
                         if idx > 0:
                             yield ("thinking", buffer[:idx])
-                        buffer = buffer[idx + len(THINKING_END):].lstrip("\n")
+                        buffer = buffer[idx + len(marker):].lstrip("\n")
                         inside_thinking = False
                     else:
-                        safe = len(buffer) - len(THINKING_END)
+                        safe = len(buffer) - MAX_MARKER
                         if safe > 0:
                             yield ("thinking", buffer[:safe])
                             buffer = buffer[safe:]
