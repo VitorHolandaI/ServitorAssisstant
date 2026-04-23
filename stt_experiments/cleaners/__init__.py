@@ -7,6 +7,7 @@ from .normalize import clean as normalize
 from .passthrough import clean as passthrough
 from .preemphasis import clean as preemphasis
 from .spectral_gate import clean as spectral_gate
+from .spectral_gate_hard import clean as spectral_gate_hard
 from .trim_silence import clean as trim_silence
 
 Cleaner = Callable[[str, str], None]
@@ -20,4 +21,5 @@ CLEANERS: Dict[str, Cleaner] = {
     "preemphasis": preemphasis,
     "trim_silence": trim_silence,
     "spectral_gate": spectral_gate,
+    "spectral_gate_hard": spectral_gate_hard,
 }

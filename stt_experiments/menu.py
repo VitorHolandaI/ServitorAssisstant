@@ -24,6 +24,7 @@ RECORD_SH = HERE / "record.sh"
 PRESETS: dict[str, list[str]] = {
     "chain_fast": ["highpass", "auto_gain"],
     "chain_denoise": ["highpass", "spectral_gate", "auto_gain"],
+    "chain_denoise_hard": ["highpass", "spectral_gate_hard"],
     "chain_full": ["highpass", "spectral_gate", "trim_silence", "auto_gain"],
     "chain_noisy_room": ["bandpass_voice", "spectral_gate", "auto_gain"],
     "chain_emphasize": ["highpass", "preemphasis", "auto_gain"],

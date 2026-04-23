@@ -52,6 +52,12 @@ Outputs that stay local only:
 - `stt_experiments/*.zip`
 - `stt_experiments/stage_recorders/output/`
 
+Open the spectrogram GUI comparator:
+
+```bash
+./.venv/bin/python -m stt_experiments.tools.spectrogram_comparator
+```
+
 ## Layout
 
 ```
@@ -68,6 +74,7 @@ stt_experiments/
 │   └── spectral_gate.py  # spectral subtraction using first 0.3 s as noise
 ├── strategies/           # wav → text
 │   └── vosk_basic.py     # Vosk direct, VOSK_MODEL_DIR env
+├── tools/                # helper GUIs and local analysis tools
 ├── samples/              # recorded + cleaned wavs
 └── voice_models/         # unzipped vosk model (gitignored)
 ```
