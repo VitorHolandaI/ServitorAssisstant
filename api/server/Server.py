@@ -61,7 +61,13 @@ class ServitorServer:
             "When the user asks about weather and does NOT specify a location, ALWAYS call "
             "get_forecast() with NO arguments — the default location is Campina Grande, Paraíba, Brazil. "
             "NEVER ask the user for coordinates or location when calling get_forecast. "
-            "When the user asks for a summary of coding activity this week, use summarize_weekly_dev_activity."
+            "For any question about what the user did this week in development, coding activity this week, "
+            "development summary, weekly dev work, GitHub activity, Gitea activity, or similar requests, "
+            "ALWAYS use summarize_weekly_dev_activity first. "
+            "When the user asks for a summary of coding activity this week, use summarize_weekly_dev_activity. "
+            "After calling summarize_weekly_dev_activity, respond with a concise human summary of the activity. "
+            "Do NOT reinterpret raw event names like mirror_sync_push or mirror_sync_create as user support questions. "
+            "Treat those values only as activity labels from the source system."
         )
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")

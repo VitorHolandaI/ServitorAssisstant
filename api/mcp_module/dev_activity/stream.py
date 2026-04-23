@@ -19,6 +19,31 @@ TIMEZONE = os.getenv("DEV_ACTIVITY_TIMEZONE", "America/Recife")
 
 mcp = FastMCP("WeeklyDevActivity", host=MCP_HOST, port=MCP_PORT, stateless_http=True)
 
+GITEA_EVENT_LABELS = {
+    "create_repo": "repositorio criado",
+    "rename_repo": "repositorio renomeado",
+    "star_repo": "repositorio favoritado",
+    "watch_repo": "repositorio acompanhado",
+    "commit_repo": "commits enviados",
+    "create_issue": "issue criada",
+    "comment_issue": "comentario em issue",
+    "close_issue": "issue fechada",
+    "reopen_issue": "issue reaberta",
+    "create_pull_request": "pull request criada",
+    "comment_pull": "comentario em pull request",
+    "merge_pull_request": "pull request mergeada",
+    "close_pull_request": "pull request fechada",
+    "reopen_pull_request": "pull request reaberta",
+    "push_tag": "tag publicada",
+    "create_branch": "branch criada",
+    "delete_branch": "branch removida",
+    "mirror_sync_push": "sincronizacao de mirror por push",
+    "mirror_sync_create": "sincronizacao de mirror criada",
+    "approve_pull_request": "pull request aprovada",
+    "reject_pull_request": "pull request rejeitada",
+    "publish_release": "release publicada",
+}
+
 
 @dataclass
 class ActivityEvent:
@@ -145,7 +170,8 @@ def _normalize_gitea_event(event: dict) -> ActivityEvent | None:
     content = event.get("content") or ""
     action = str(event_type)
 
-    summary = f"{event_type} em {repo}"
+    label = GITEA_EVENT_LABELS.get(event_type, event_type.replace("_", " "))
+    summary = f"{label} em {repo}"
     details_parts = []
     if ref_name:
         details_parts.append(ref_name)
@@ -279,13 +305,14 @@ def _build_summary(platform: str, events: list[ActivityEvent], since: dt.datetim
             "Nenhuma atividade encontrada."
         )
 
-    type_counter = Counter(event.event_type for event in events)
+    type_counter = Counter(event.summary.split(" em ", 1)[0] for event in events)
     repo_counter = Counter(event.repo for event in events)
 
     lines = [
         platform,
         f"Periodo: {since.strftime('%Y-%m-%d %H:%M')} ate {until.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE})",
         f"Total de eventos: {len(events)}",
+        "Resumo pronto para o usuario final. Nao explique nomes internos de eventos, apenas descreva a atividade.",
         "Tipos mais frequentes: " + ", ".join(f"{name}={count}" for name, count in type_counter.most_common(5)),
         "Repositorios mais ativos: " + ", ".join(f"{name}={count}" for name, count in repo_counter.most_common(5)),
         "Atividades recentes:",
@@ -311,7 +338,7 @@ async def dev_activity_help() -> str:
 
 @mcp.tool()
 async def summarize_weekly_dev_activity(platform: str = "all") -> str:
-    """Resume a atividade de desenvolvimento da semana atual no GitHub, no Gitea, ou em ambos."""
+    """Return an end-user-ready summary of coding activity this week. Do not reinterpret event names as questions about product features."""
     platform_normalized = platform.strip().lower()
     if platform_normalized not in {"all", "github", "gitea"}:
         return "Parametro invalido. Use: all, github ou gitea."
