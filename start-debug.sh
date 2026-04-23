@@ -62,20 +62,31 @@ fi
 dbg "DEBUG=true — all Python logs printed to terminal"
 echo ""
 
-# ── 1. MCP Server (port 8001) — logs to file + terminal ──────────
+# ── 1. General MCP Server (port 8001) — logs to file + terminal ──
 
-log "Starting MCP server on :8001 ..."
+log "Starting general MCP server on :8001 ..."
 (
     cd "$ROOT_DIR/api/mcp_module/stremable_http"
     uv run --project "$ROOT_DIR" python stream2.py 2>&1 | tee "$ROOT_DIR/logs/mcp.log" | sed "s/^/${CYAN}[MCP]${NC} /"
 ) &
 MCP_PID=$!
 PIDS+=($MCP_PID)
-ok "MCP server PID=$MCP_PID"
+ok "General MCP server PID=$MCP_PID"
+
+# ── 2. Weekly Activity MCP Server (port 8002) ────────────────────
+
+log "Starting weekly activity MCP server on :8002 ..."
+(
+    cd "$ROOT_DIR/api/mcp_module/dev_activity"
+    uv run --project "$ROOT_DIR" python stream.py 2>&1 | tee "$ROOT_DIR/logs/mcp-activity.log" | sed "s/^/${MAGENTA}[MCP-ACTIVITY]${NC} /"
+) &
+MCP_ACTIVITY_PID=$!
+PIDS+=($MCP_ACTIVITY_PID)
+ok "Weekly activity MCP server PID=$MCP_ACTIVITY_PID"
 
 sleep 3
 
-# ── 2. Server API (port 8000) — logs to file + terminal ──────────
+# ── 3. Server API (port 8000) — logs to file + terminal ──────────
 
 log "Starting Server API on :8000 ..."
 (
@@ -86,7 +97,7 @@ API_PID=$!
 PIDS+=($API_PID)
 ok "Server API PID=$API_PID"
 
-# ── 3. Frontend (port 5173) — logs to file only ───────────────────
+# ── 4. Frontend (port 5173) — logs to file only ───────────────────
 
 log "Starting frontend (logs → logs/front.log)..."
 (
@@ -104,6 +115,7 @@ echo -e "${MAGENTA}━━━━━━━━━━━━━━━━━━━━�
 echo -e "  Frontend  →  ${YELLOW}http://localhost:5173${NC}"
 echo -e "  API       →  ${YELLOW}http://localhost:8000${NC}"
 echo -e "  MCP       →  ${YELLOW}http://localhost:8001/mcp${NC}"
+echo -e "  MCP Dev   →  ${YELLOW}http://localhost:8002/mcp${NC}"
 echo -e "  Logs dir  →  ${YELLOW}logs/${NC}"
 echo ""
 echo -e "  ${MAGENTA}Press Ctrl+C to stop all services${NC}"

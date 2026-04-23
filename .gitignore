@@ -6,3 +6,15 @@ __pycache__/
 logs/
 data/
 api/.env
+.env
+front/.env
+*.pem
+*.key
+CLAUDE.md
+.claude/
+.codex
+.codex/
+melhor.txt
+voice_models/*.onnx
+voice_models/*.onnx.json
+voice_models/*.onnx.json.*

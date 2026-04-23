@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────
 # Servitor Assistant – Local startup script
-# Starts: MCP server (8001) + Server API (8000) + Frontend (5173)
+# Starts: MCP servers (8001, 8002) + Server API (8000) + Frontend (5173)
 # ─────────────────────────────────────────────
 
 set -e
@@ -60,21 +60,32 @@ if ! ollama list &>/dev/null; then
     sleep 2
 fi
 
-# ── 1. MCP Server (port 8001) ─────────────────────────────────────
+# ── 1. General MCP Server (port 8001) ─────────────────────────────
 
-log "Starting MCP server on :8001 ..."
+log "Starting general MCP server on :8001 ..."
 (
     cd "$ROOT_DIR/api/mcp_module/stremable_http"
     uv run --project "$ROOT_DIR" python stream2.py
 ) > "$ROOT_DIR/logs/mcp.log" 2>&1 &
 MCP_PID=$!
 PIDS+=($MCP_PID)
-ok "MCP server PID=$MCP_PID  (logs/mcp.log)"
+ok "General MCP server PID=$MCP_PID  (logs/mcp.log)"
+
+# ── 2. Weekly Activity MCP Server (port 8002) ────────────────────
+
+log "Starting weekly activity MCP server on :8002 ..."
+(
+    cd "$ROOT_DIR/api/mcp_module/dev_activity"
+    uv run --project "$ROOT_DIR" python stream.py
+) > "$ROOT_DIR/logs/mcp-activity.log" 2>&1 &
+MCP_ACTIVITY_PID=$!
+PIDS+=($MCP_ACTIVITY_PID)
+ok "Weekly activity MCP server PID=$MCP_ACTIVITY_PID  (logs/mcp-activity.log)"
 
 # Wait briefly for MCP to be ready before starting the API
 sleep 2
 
-# ── 2. Server API (port 8000) ─────────────────────────────────────
+# ── 3. Server API (port 8000) ─────────────────────────────────────
 
 log "Starting Server API on :8000 ..."
 (
@@ -85,7 +96,7 @@ API_PID=$!
 PIDS+=($API_PID)
 ok "Server API PID=$API_PID  (logs/api.log)"
 
-# ── 3. Frontend (port 5173) ───────────────────────────────────────
+# ── 4. Frontend (port 5173) ───────────────────────────────────────
 
 log "Starting frontend..."
 (
@@ -105,6 +116,7 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "  Frontend  →  ${YELLOW}http://localhost:5173${NC}"
 echo -e "  API       →  ${YELLOW}http://localhost:8000${NC}"
 echo -e "  MCP       →  ${YELLOW}http://localhost:8001/mcp${NC}"
+echo -e "  MCP Dev   →  ${YELLOW}http://localhost:8002/mcp${NC}"
 echo ""
 echo -e "  ${CYAN}Press Ctrl+C to stop all services${NC}"
 echo ""

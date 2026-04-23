@@ -24,6 +24,9 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
 server_ip = os.getenv("SERVER_IP", "localhost")
 MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
+MCP_EXTRA_ADDRESSES = [
+    addr.strip() for addr in os.getenv("MCP_EXTRA_ADDRESSES", "").split(",") if addr.strip()
+]
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 logging.basicConfig(
@@ -31,7 +34,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-logger.info(f"[Server] voice={voice_path}  mcp={MCP_ADDRESS}  debug={DEBUG}")
+logger.info(f"[Server] voice={voice_path}  mcp={[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES]}  debug={DEBUG}")
 
 
 class ServitorServer:
@@ -57,12 +60,13 @@ class ServitorServer:
             "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
             "When the user asks about weather and does NOT specify a location, ALWAYS call "
             "get_forecast() with NO arguments — the default location is Campina Grande, Paraíba, Brazil. "
-            "NEVER ask the user for coordinates or location when calling get_forecast."
+            "NEVER ask the user for coordinates or location when calling get_forecast. "
+            "When the user asks for a summary of coding activity this week, use summarize_weekly_dev_activity."
         )
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
-            mcp_addresses=[MCP_ADDRESS],
+            mcp_addresses=[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES],
             model_name="lfm2.5-thinking:latest",
             model_address=ollama_host,
             system_prompt=self.base_prompt
