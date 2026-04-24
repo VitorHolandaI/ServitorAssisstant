@@ -89,7 +89,7 @@ RSYNC_ARGS=(
     --checksum
     --delete
     --human-readable
-    --info=progress2
+    --info=flist2,name,progress2
     --itemize-changes
     --exclude=.git/
     --exclude=.gitignore
