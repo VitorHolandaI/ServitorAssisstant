@@ -8,8 +8,9 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, UploadFile
-from typing import Dict, Any
+from fastapi import FastAPI, UploadFile, HTTPException
+from typing import Dict, Any, Optional
+from pydantic import BaseModel
 from server import ServitorServer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -193,6 +194,119 @@ async def clear_conversation():
 async def check_reminders():
     reminded = await Servitor.check_due_reminders()
     return {"reminded": reminded}
+
+
+TASK_FIELDS = (
+    "title", "description", "due_at", "is_completed",
+    "recurrence_type", "recurrence_interval",
+    "recurrence_day_of_week", "recurrence_day_of_month", "timezone",
+)
+
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    due_at: Optional[str] = None
+    is_completed: Optional[bool] = None
+    recurrence_type: Optional[str] = None
+    recurrence_interval: Optional[int] = None
+    recurrence_day_of_week: Optional[int] = None
+    recurrence_day_of_month: Optional[int] = None
+    timezone: Optional[str] = None
+
+
+class TaskCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    due_at: Optional[str] = None
+    recurrence_type: str = "none"
+    recurrence_interval: int = 1
+    recurrence_day_of_week: Optional[int] = None
+    recurrence_day_of_month: Optional[int] = None
+    timezone: str = "America/Recife"
+
+
+def _tasks_conn():
+    if not DB_PATH.exists():
+        raise HTTPException(503, f"DB not found at {DB_PATH}")
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@app.get("/tasks")
+async def list_all_tasks(show_completed: bool = True, limit: int = 200):
+    conn = _tasks_conn()
+    if show_completed:
+        rows = conn.execute(
+            "SELECT * FROM tasks ORDER BY is_completed ASC, due_at ASC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE is_completed = 0 ORDER BY due_at ASC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    return {"tasks": [dict(r) for r in rows]}
+
+
+@app.get("/tasks/{task_id}")
+async def get_task_api(task_id: int):
+    conn = _tasks_conn()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(404, f"Task {task_id} not found")
+    return dict(row)
+
+
+@app.put("/tasks/{task_id}")
+async def update_task_api(task_id: int, payload: TaskUpdate):
+    fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if k in TASK_FIELDS}
+    if not fields:
+        raise HTTPException(400, "No updatable fields supplied")
+    set_clause = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [task_id]
+    conn = _tasks_conn()
+    cur = conn.execute(f"UPDATE tasks SET {set_clause} WHERE id = ?", tuple(values))
+    conn.commit()
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(404, f"Task {task_id} not found")
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    conn.close()
+    logger.info(f"[API] task {task_id} updated fields={list(fields)}")
+    return dict(row)
+
+
+@app.post("/tasks")
+async def create_task_api(payload: TaskCreate):
+    conn = _tasks_conn()
+    created_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cur = conn.execute(
+        """INSERT INTO tasks (title, description, created_at, due_at, recurrence_type,
+           recurrence_interval, recurrence_day_of_week, recurrence_day_of_month, timezone)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (payload.title, payload.description, created_at, payload.due_at,
+         payload.recurrence_type, payload.recurrence_interval,
+         payload.recurrence_day_of_week, payload.recurrence_day_of_month, payload.timezone),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM tasks WHERE id = ?", (cur.lastrowid,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/tasks/{task_id}")
+async def delete_task_api(task_id: int):
+    conn = _tasks_conn()
+    cur = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(404, f"Task {task_id} not found")
+    return {"status": "deleted", "id": task_id}
 
 
 @app.post("/file_recorded")

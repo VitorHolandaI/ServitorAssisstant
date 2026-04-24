@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
+import TasksPage from './TasksPage';
+
+type View = 'chat' | 'tasks';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${import.meta.env.VITE_SERVER_IP}:8000`;
 const API_STREAM = `${API_BASE}/stream_message`;
@@ -32,6 +35,7 @@ const App: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isAudio, setIsAudio] = useState(false);
+  const [view, setView] = useState<View>('chat');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -153,8 +157,19 @@ const App: React.FC = () => {
             <span className="header-cog">⚙</span>
           </div>
           <div className="header-sub">Adeptus Mechanicus Interface</div>
+          <div className="view-tabs">
+            <button
+              className={`tab ${view === 'chat' ? 'active' : ''}`}
+              onClick={() => setView('chat')}
+            >Chat</button>
+            <button
+              className={`tab ${view === 'tasks' ? 'active' : ''}`}
+              onClick={() => setView('tasks')}
+            >Tasks</button>
+          </div>
         </header>
 
+        {view === 'tasks' ? <TasksPage /> : <>
         <div className="messages-container">
           {messages.map(message => (
             <div key={message.id} className={`message ${message.sender}`}>
@@ -200,6 +215,7 @@ const App: React.FC = () => {
             </button>
           </div>
         </form>
+        </>}
       </div>
     </div>
   );

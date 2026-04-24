@@ -24,6 +24,9 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
 server_ip = os.getenv("SERVER_IP", "localhost")
 MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
+MCP_EXTRA_ADDRESSES = [
+    addr.strip() for addr in os.getenv("MCP_EXTRA_ADDRESSES", "").split(",") if addr.strip()
+]
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
 logging.basicConfig(
@@ -31,7 +34,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-logger.info(f"[Server] voice={voice_path}  mcp={MCP_ADDRESS}  debug={DEBUG}")
+logger.info(f"[Server] voice={voice_path}  mcp={[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES]}  debug={DEBUG}")
 
 
 class ServitorServer:
@@ -57,12 +60,19 @@ class ServitorServer:
             "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
             "When the user asks about weather and does NOT specify a location, ALWAYS call "
             "get_forecast() with NO arguments — the default location is Campina Grande, Paraíba, Brazil. "
-            "NEVER ask the user for coordinates or location when calling get_forecast."
+            "NEVER ask the user for coordinates or location when calling get_forecast. "
+            "For any question about what the user did this week in development, coding activity this week, "
+            "development summary, weekly dev work, GitHub activity, Gitea activity, or similar requests, "
+            "ALWAYS use summarize_weekly_dev_activity first. "
+            "When the user asks for a summary of coding activity this week, use summarize_weekly_dev_activity. "
+            "After calling summarize_weekly_dev_activity, respond with a concise human summary of the activity. "
+            "Do NOT reinterpret raw event names like mirror_sync_push or mirror_sync_create as user support questions. "
+            "Treat those values only as activity labels from the source system."
         )
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
-            mcp_addresses=[MCP_ADDRESS],
+            mcp_addresses=[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES],
             model_name="lfm2.5-thinking:latest",
             model_address=ollama_host,
             system_prompt=self.base_prompt
@@ -126,8 +136,22 @@ class ServitorServer:
         """Yields (type, content) tuples where type is 'thinking' or 'text'."""
         logger.info(f"[Server] process_ollama_stream: {talk[:80]!r}")
 
-        THINKING_START = "Thinking..."
-        THINKING_END = "...done thinking."
+        # Different models emit different markers around chain-of-thought.
+        # Handle both Ollama "Thinking..." prose and raw <think> tags.
+        THINKING_STARTS = ("Thinking...", "<think>")
+        THINKING_ENDS = ("...done thinking.", "</think>")
+        MAX_MARKER = max(len(m) for m in THINKING_STARTS + THINKING_ENDS)
+
+        def _find_first(text: str, markers):
+            best_idx = -1
+            best_marker = None
+            for m in markers:
+                i = text.find(m)
+                if i != -1 and (best_idx == -1 or i < best_idx):
+                    best_idx = i
+                    best_marker = m
+            return best_idx, best_marker
+
         inside_thinking = False
         buffer = ""
         history = self._load_history()
@@ -137,27 +161,27 @@ class ServitorServer:
                 buffer += chunk
 
                 if not inside_thinking:
-                    if THINKING_START in buffer:
-                        idx = buffer.index(THINKING_START)
+                    idx, marker = _find_first(buffer, THINKING_STARTS)
+                    if idx != -1:
                         before = buffer[:idx]
                         if before.strip():
                             yield ("text", before)
-                        buffer = buffer[idx + len(THINKING_START):].lstrip("\n")
+                        buffer = buffer[idx + len(marker):].lstrip("\n")
                         inside_thinking = True
                     else:
-                        safe = len(buffer) - len(THINKING_START)
+                        safe = len(buffer) - MAX_MARKER
                         if safe > 0:
                             yield ("text", buffer[:safe])
                             buffer = buffer[safe:]
                 else:
-                    if THINKING_END in buffer:
-                        idx = buffer.index(THINKING_END)
+                    idx, marker = _find_first(buffer, THINKING_ENDS)
+                    if idx != -1:
                         if idx > 0:
                             yield ("thinking", buffer[:idx])
-                        buffer = buffer[idx + len(THINKING_END):].lstrip("\n")
+                        buffer = buffer[idx + len(marker):].lstrip("\n")
                         inside_thinking = False
                     else:
-                        safe = len(buffer) - len(THINKING_END)
+                        safe = len(buffer) - MAX_MARKER
                         if safe > 0:
                             yield ("thinking", buffer[:safe])
                             buffer = buffer[safe:]
