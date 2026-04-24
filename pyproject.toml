@@ -138,7 +138,7 @@ dependencies = [
     "tqdm==4.67.1",
     "trainer==0.0.36",
     "transformers==5.0.0rc3",
-    "triton==3.4.0",
+    "triton==3.4.0 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tts==0.22.0",
     "typeguard==4.4.4",
     "typer-slim==0.20.0",

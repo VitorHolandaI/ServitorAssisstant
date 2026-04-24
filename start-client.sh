@@ -47,7 +47,6 @@ check_cmd() {
     fi
 }
 
-check_cmd uv
 check_cmd python3
 
 # ── Check for Raspberry Pi GPIO support ───────────────────────────
@@ -59,10 +58,15 @@ fi
 
 # ── Client API (port 8000) ────────────────────────────────────────
 
+CLIENT_PYTHON="python3"
+if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+    CLIENT_PYTHON="$ROOT_DIR/.venv/bin/python"
+fi
+
 log "Starting Client API on :8000 ..."
 (
     cd "$ROOT_DIR/api"
-    uv run --project "$ROOT_DIR" python ClientApi.py
+    "$CLIENT_PYTHON" ClientApi.py
 ) > "$ROOT_DIR/logs/client.log" 2>&1 &
 CLIENT_PID=$!
 PIDS+=($CLIENT_PID)

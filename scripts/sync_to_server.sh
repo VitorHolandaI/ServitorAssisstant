@@ -86,12 +86,15 @@ done
 
 RSYNC_ARGS=(
     -az
+    --checksum
     --delete
     --human-readable
     --info=progress2
+    --itemize-changes
     --exclude=.git/
     --exclude=.gitignore
     --exclude=.env
+    --exclude=.venv/
     --exclude=api/.env
     --exclude=front/.env
     --exclude=.claude/
@@ -102,6 +105,10 @@ RSYNC_ARGS=(
     --exclude=data/
     --exclude=__pycache__/
     --exclude=*.pyc
+    --exclude=node_modules/
+    --exclude=front/node_modules/
+    --exclude=front/dist/
+    --exclude=front/dist-ssr/
     --exclude=*.pem
     --exclude=*.key
     --exclude=melhor.txt

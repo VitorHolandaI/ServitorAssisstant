@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
-import os
-import sox
+import asyncio
+import threading
 import time
-import socket
-import requests
-import subprocess
-import sounddevice
-import numpy as np
-import soundfile as sf
 from io import BytesIO
+
+import requests
+import sounddevice
+import soundfile as sf
+import sox
 import RPi.GPIO as GPIO
 import speech_recognition as sr
-from playsound3 import playsound
 
 
 class ServitorClient:
     recognizer = None
     name = "default-name"
     server: str = "ip"
-    pwm: GPIO.PWM = None
 
     def __init__(self, name, server_ip, gpio_number):
         """
@@ -30,6 +27,12 @@ class ServitorClient:
         self.name = name
         self.server = server_ip
         self.recognizer = sr.Recognizer()
+        self.pwm = None
+        self.led_pin = gpio_number
+        self._playback_lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._mic_pause_until = 0.0
+        self._playback_generation = 0
         self.set_led_pin(gpio_number)
 
     def led_on_low(self):
@@ -56,11 +59,85 @@ class ServitorClient:
         to be used.
         """
         if self.pwm is None:
-            print("ITS NONE")
-            GPIO.cleanup()
-            GPIO.setmode(GPIO.BCM)
+            GPIO.setwarnings(False)
+            if GPIO.getmode() != GPIO.BCM:
+                GPIO.setmode(GPIO.BCM)
             GPIO.setup(pin, GPIO.OUT)
             self.pwm = GPIO.PWM(pin, 1000)
+
+    def cleanup(self):
+        self._stop_event.set()
+        if self.pwm is not None:
+            try:
+                self.pwm.stop()
+            except Exception:
+                pass
+            self.pwm = None
+        GPIO.cleanup()
+
+    def _mark_playback_active(self, cooldown_seconds: float) -> None:
+        with self._playback_lock:
+            self._playback_generation += 1
+            self._mic_pause_until = max(
+                self._mic_pause_until,
+                time.monotonic() + cooldown_seconds,
+            )
+
+    def _mark_playback_finished(self, cooldown_seconds: float) -> None:
+        with self._playback_lock:
+            self._playback_generation += 1
+            self._mic_pause_until = max(
+                self._mic_pause_until,
+                time.monotonic() + cooldown_seconds,
+            )
+
+    def _snapshot_playback_state(self) -> tuple[int, float]:
+        with self._playback_lock:
+            return self._playback_generation, self._mic_pause_until
+
+    def _speaker_recently_active(self) -> bool:
+        _, pause_until = self._snapshot_playback_state()
+        return time.monotonic() < pause_until
+
+    def _wait_until_listen_allowed(self) -> None:
+        while not self._stop_event.is_set():
+            _, pause_until = self._snapshot_playback_state()
+            remaining = pause_until - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 0.25))
+
+    def _capture_microphone_audio(self) -> bytes | None:
+        """
+        Capture one utterance from the microphone when the speaker is idle.
+
+        Example:
+            wav_data = client._capture_microphone_audio()
+        """
+        self._wait_until_listen_allowed()
+        if self._stop_event.is_set():
+            return None
+
+        playback_generation, _ = self._snapshot_playback_state()
+        with sr.Microphone(device_index=1) as source:
+            print("Adjusting To noise")
+            self.recognizer.adjust_for_ambient_noise(source, duration=4)
+            self.led_on_low()
+            try:
+                audio = self.recognizer.listen(
+                    source,
+                    timeout=1,
+                    phrase_time_limit=10,
+                )
+            finally:
+                self.led_off()
+
+        current_generation, _ = self._snapshot_playback_state()
+        if current_generation != playback_generation or self._speaker_recently_active():
+            print("[Listen] Discarding mic capture because speaker playback was active.")
+            return None
+
+        return audio.get_wav_data()
 
     def process_audio(self, audio):
         # audio em bytes
@@ -90,12 +167,15 @@ class ServitorClient:
         """
         Function to play the specific audio file.
         """
-
+        cooldown_seconds = 1.5
+        self._mark_playback_active(cooldown_seconds)
         try:
             sounddevice.play(processed_audio, sample_rate)
+            sounddevice.wait()
         except Exception as e:
             print(f"Error running play of audio {e}")
-        time.sleep(1)
+        finally:
+            self._mark_playback_finished(cooldown_seconds)
 
     def process_audio2(self, audio):
         """
@@ -136,6 +216,7 @@ class ServitorClient:
 
         try:
             res = requests.post(url, files=files, timeout=30)
+            res.raise_for_status()
             print(res)
         except Exception as e:
             print(f"[SendAudio] Failed to send audio: {e}")
@@ -147,6 +228,7 @@ class ServitorClient:
             try:
                 url = f"http://{self.server}:8001/check_reminders"
                 res = await asyncio.to_thread(requests.get, url, timeout=30)
+                res.raise_for_status()
                 data = res.json()
                 reminded = data.get("reminded", [])
                 if reminded:
@@ -162,21 +244,17 @@ class ServitorClient:
 
         :param sr speech_recognition module: used to listen to the microphone
         """
-        while True:
+        while not self._stop_event.is_set():
             try:
-                with sr.Microphone(device_index=1) as source:
-                    print("Adjusting To noise")
-                    self.recognizer.adjust_for_ambient_noise(source, duration=4)
-                    self.led_on_low()
-                    audio = self.recognizer.listen(source, phrase_time_limit=10)
-                    print("Speak2!")
-                    wav_data = audio.get_wav_data()
-                    print("Speak3!")
-                    self.led_off()
-                    print("Speak4!")
-                    self.send_audio_bytes(wav_data)
-                    print("Speak5!")
-                    time.sleep(10)
+                wav_data = self._capture_microphone_audio()
+                if wav_data is None:
+                    continue
+                print("Speak4!")
+                self.send_audio_bytes(wav_data)
+                print("Speak5!")
+                time.sleep(10)
+            except sr.WaitTimeoutError:
+                continue
             except Exception as e:
                 print(f"[Listen] Error: {e}, retrying in 5s...")
                 time.sleep(5)
