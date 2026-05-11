@@ -35,5 +35,5 @@ pandas==1.5.3
 # Utilities
 numpy==1.26.4
 requests==2.33.0
-urllib3>=2.6.3
+urllib3>=2.7.0
 python-dotenv==1.0.1
