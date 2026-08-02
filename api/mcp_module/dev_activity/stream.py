@@ -162,9 +162,10 @@ def _normalize_gitea_event(event: dict) -> ActivityEvent | None:
         return None
 
     repo_info = event.get("repo") or {}
-    owner = repo_info.get("owner_name") or repo_info.get("owner") or ""
+    owner_raw = repo_info.get("owner_name") or repo_info.get("owner") or ""
+    owner = owner_raw["login"] if isinstance(owner_raw, dict) else str(owner_raw)
     name = repo_info.get("name") or "unknown"
-    repo = f"{owner}/{name}".strip("/") if owner else name
+    repo = f"{owner}/{name}".strip("/")
     event_type = event.get("op_type") or "unknown"
     ref_name = event.get("ref_name") or ""
     content = event.get("content") or ""
@@ -175,7 +176,7 @@ def _normalize_gitea_event(event: dict) -> ActivityEvent | None:
     details_parts = []
     if ref_name:
         details_parts.append(ref_name)
-    if content:
+    if content and isinstance(content, str):
         details_parts.append(content.replace("\n", " ")[:140])
     details = " | ".join(details_parts) if details_parts else "sem detalhes adicionais"
 
@@ -224,75 +225,40 @@ def _fetch_github_events(username: str, since: dt.datetime) -> list[ActivityEven
     return sorted(events, key=lambda item: item.created_at, reverse=True)
 
 
-def _fetch_gitea_repos(username: str) -> list[dict]:
-    repos: list[dict] = []
+def _fetch_gitea_events(username: str, since: dt.datetime, until: dt.datetime | None = None) -> list[ActivityEvent]:
+    """Fetch Gitea events for the user via user-level activity feed instead of per-repo."""
     base_url = os.getenv("GITEA_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
     headers = _gitea_headers()
-
-    for page in range(1, 11):
-        payload = _http_get_json(
-            f"{base_url}/api/v1/users/{username}/repos",
-            headers=headers,
-            params={"limit": 100, "page": page},
-        )
-        if not isinstance(payload, list) or not payload:
-            break
-        repos.extend(payload)
-        if len(payload) < 100:
-            break
-
-    return repos
-
-
-def _fetch_gitea_events(username: str, since: dt.datetime, until: dt.datetime) -> list[ActivityEvent]:
-    base_url = os.getenv("GITEA_BASE_URL", "http://127.0.0.1:3000").rstrip("/")
-    headers = _gitea_headers()
-    repos = _fetch_gitea_repos(username)
     events: list[ActivityEvent] = []
     seen_ids: set[str] = set()
 
-    current_day = since.date()
-    final_day = until.date()
-    while current_day <= final_day:
-        day_param = current_day.isoformat()
-        for repo in repos:
-            owner = ((repo.get("owner") or {}).get("login")) or username
-            name = repo.get("name")
-            if not name:
-                continue
+    try:
+        payload = _http_get_json(
+            f"{base_url}/api/v1/users/{username}/activities/feeds",
+            headers=headers,
+            params={"limit": 200},
+        )
+        if not isinstance(payload, list):
+            return events
+    except HTTPError:
+        return events
 
-            for page in range(1, 6):
-                try:
-                    payload = _http_get_json(
-                        f"{base_url}/api/v1/repos/{owner}/{name}/activities/feeds",
-                        headers=headers,
-                        params={"date": day_param, "limit": 50, "page": page},
-                    )
-                except HTTPError:
-                    break
-                if not isinstance(payload, list) or not payload:
-                    break
+    for item in payload:
+        act_user = item.get("act_user") or {}
+        act_login = (act_user.get("login") or act_user.get("username") or "").lower()
+        if act_login and act_login != username.lower():
+            continue
 
-                for item in payload:
-                    act_user = item.get("act_user") or {}
-                    act_login = (act_user.get("login") or act_user.get("username") or "").lower()
-                    if act_login and act_login != username.lower():
-                        continue
+        event_id = str(item.get("id") or "")
+        if event_id and event_id in seen_ids:
+            continue
+        if event_id:
+            seen_ids.add(event_id)
 
-                    event_id = str(item.get("id") or "")
-                    if event_id and event_id in seen_ids:
-                        continue
-                    if event_id:
-                        seen_ids.add(event_id)
-
-                    normalized = _normalize_gitea_event(item)
-                    if normalized is None or normalized.created_at < since:
-                        continue
-                    events.append(normalized)
-
-                if len(payload) < 50:
-                    break
-        current_day += dt.timedelta(days=1)
+        normalized = _normalize_gitea_event(item)
+        if normalized is None or normalized.created_at < since:
+            continue
+        events.append(normalized)
 
     return sorted(events, key=lambda item: item.created_at, reverse=True)
 
