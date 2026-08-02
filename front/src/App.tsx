@@ -6,8 +6,18 @@ type View = 'chat' | 'tasks';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${import.meta.env.VITE_SERVER_IP}:8000`;
 const API_STREAM = `${API_BASE}/stream_message`;
-const MAX_CTX_TOKENS = 49152;
-const CHARS_PER_TOKEN = 5;
+
+interface ContextConfig {
+  maxTokens: number;
+  reservedTokens: number;
+  charsPerToken: number;
+}
+
+const DEFAULT_CONTEXT: ContextConfig = {
+  maxTokens: 32768,
+  reservedTokens: 5000,
+  charsPerToken: 5,
+};
 
 interface Message {
   id: string;
@@ -30,21 +40,29 @@ const ThinkingBlock = ({ content }: { content: string }) => {
   );
 };
 
-const estimateTokens = (text: string) => Math.ceil(text.length / CHARS_PER_TOKEN);
 const CTX_WARN = 0.75;
 const CTX_CRIT = 0.9;
 
-const ContextBar = ({ messages }: { messages: Message[] }) => {
+const ContextBar = ({ messages, config }: { messages: Message[]; config: ContextConfig }) => {
   const used = useMemo(() => {
-    const total = messages.reduce((acc, m) => acc + estimateTokens(m.text + (m.thinking || '')), 0);
-    return total;
-  }, [messages]);
-  const pct = Math.min(used / MAX_CTX_TOKENS, 1);
+    const messageChars = messages.reduce((acc, m) => acc + m.text.length + (m.thinking?.length ?? 0), 0);
+    return config.reservedTokens + Math.ceil(messageChars / config.charsPerToken);
+  }, [messages, config]);
+  const pct = Math.min(used / config.maxTokens, 1);
+  const available = Math.max(config.maxTokens - used, 0);
   const color = pct >= CTX_CRIT ? '#ff4444' : pct >= CTX_WARN ? '#ffaa00' : '#44cc44';
   return (
-    <div className="context-bar" title={`~${used.toLocaleString()} / ${MAX_CTX_TOKENS.toLocaleString()} tokens`}>
-      <div className="context-bar-fill" style={{ width: `${pct * 100}%`, background: color }} />
-      <span className="context-bar-text">{Math.round(pct * 100)}%</span>
+    <div
+      className="context-meter"
+      title="Estimated from message characters plus reserved system prompt, tools and response space"
+    >
+      <div className="context-meter-label">
+        <span>Context ~{used.toLocaleString()} / {config.maxTokens.toLocaleString()}</span>
+        <span>{(pct * 100).toFixed(1)}% used · {available.toLocaleString()} free</span>
+      </div>
+      <div className="context-bar" role="progressbar" aria-valuenow={used} aria-valuemin={0} aria-valuemax={config.maxTokens}>
+        <div className="context-bar-fill" style={{ width: `${pct * 100}%`, background: color }} />
+      </div>
     </div>
   );
 };
@@ -57,6 +75,7 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isAudio, setIsAudio] = useState(false);
   const [view, setView] = useState<View>('chat');
+  const [contextConfig, setContextConfig] = useState<ContextConfig>(DEFAULT_CONTEXT);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -73,6 +92,20 @@ const App: React.FC = () => {
         }
       })
       .catch(err => console.warn('Failed to load conversation:', err));
+  }, []);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/context_config`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => setContextConfig({
+        maxTokens: data.max_tokens,
+        reservedTokens: data.reserved_tokens,
+        charsPerToken: data.chars_per_token,
+      }))
+      .catch(err => console.warn('Failed to load context config:', err));
   }, []);
 
   useEffect(() => {
@@ -214,7 +247,7 @@ const App: React.FC = () => {
             <span className="header-cog">⚙</span>
           </div>
           <div className="header-sub">Adeptus Mechanicus Interface</div>
-          <ContextBar messages={messages} />
+          <ContextBar messages={messages} config={contextConfig} />
           <div className="view-tabs">
             <button
               className={`tab ${view === 'chat' ? 'active' : ''}`}

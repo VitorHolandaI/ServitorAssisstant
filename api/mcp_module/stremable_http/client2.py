@@ -32,7 +32,9 @@ class llm_mcp_client():
         self.model_name = model_name
         self.model_address = model_address
         self.prompt = system_prompt
-        self._llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive="10m", timeout=120, num_ctx=49152, model_kwargs={"think": False})
+        self.context_window = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
+        self.context_reserved_tokens = 5000
+        self._llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive="10m", timeout=120, num_ctx=self.context_window, model_kwargs={"think": False})
         self._stack: contextlib.AsyncExitStack | None = None
         self._agent = None
         logger.info(f"[client2] init model={model_name} mcp={mcp_addresses}")

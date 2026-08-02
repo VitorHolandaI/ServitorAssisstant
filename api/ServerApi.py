@@ -183,6 +183,16 @@ async def get_conversation(limit: int = 100):
     return {"messages": [dict(r) for r in reversed(rows)]}
 
 
+@app.get("/context_config")
+async def get_context_config():
+    agent = getattr(Servitor, "agent", None)
+    return {
+        "max_tokens": getattr(agent, "context_window", 32768),
+        "reserved_tokens": getattr(agent, "context_reserved_tokens", 5000),
+        "chars_per_token": 5,
+    }
+
+
 @app.delete("/conversation")
 async def clear_conversation():
     if DB_PATH.exists():
