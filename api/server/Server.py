@@ -16,12 +16,12 @@ from mcp_module.stremable_http.client2 import llm_mcp_client
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
-# Context budget: 48K tokens total (num_ctx=49152).
+# Context budget: 32K tokens total (num_ctx=32768).
 # ~500 tokens for system prompt, ~4000 reserved for tool call results,
 # ~500 for user message + buffer. Remainder for history.
 # At ~5 chars/token for Portuguese text:
-# (49152 - 500 - 4000 - 500) * 5 ≈ 218K chars. Use 160K for safety.
-MAX_HISTORY_CHARS = 160_000
+# (32768 - 500 - 4000 - 500) * 5 ≈ 139K chars. Use 80K for safety.
+MAX_HISTORY_CHARS = 80_000
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
@@ -82,7 +82,7 @@ class ServitorServer:
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
             mcp_addresses=[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES],
-            model_name="qwen3.5:2b",
+            model_name="gemma4:e2b-it-qat",
             model_address=ollama_host,
             system_prompt=self.base_prompt
         )
