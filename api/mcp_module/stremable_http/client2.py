@@ -86,23 +86,17 @@ class llm_mcp_client():
                 in_tool_call = False
                 async for event in agent.astream_events({"messages": msgs}, version="v2"):
                     event_type = event["event"]
-                    logger.debug(f"[client2] event: {event_type}")
 
                     if event_type == "on_chat_model_stream":
                         chunk = event["data"].get("chunk")
                         if not chunk or not hasattr(chunk, "content") or not chunk.content:
-                            logger.debug(f"[client2] skip: no content chunk={type(chunk).__name__ if chunk else None}")
                             continue
-                        tc = getattr(chunk, "tool_calls", None)
-                        tcc = getattr(chunk, "tool_call_chunks", None)
-                        if tc or tcc:
-                            logger.debug(f"[client2] tool_chunks: tc={tc} tcc={tcc} content={chunk.content[:80]!r}")
+                        if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
                             in_tool_call = True
                             continue
                         if in_tool_call:
-                            logger.debug(f"[client2] skip: in_tool_call=True content={chunk.content[:80]!r}")
                             continue
-                        logger.debug(f"[client2] yielding {len(chunk.content)} chars: {chunk.content[:80]!r}")
+                        logger.debug(f"[client2] yielding {len(chunk.content)} chars")
                         yield chunk.content
 
                     elif event_type == "on_chat_model_end":
