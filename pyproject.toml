@@ -77,7 +77,7 @@ dependencies = [
     "multidict==6.7.0",
     "murmurhash==1.0.15",
     "networkx==2.8.8",
-    "nltk==3.9.4",
+    "nltk==3.10.1",
     "num2words==0.5.14",
     "numba==0.62.1",
     "numpy==1.26.4",
