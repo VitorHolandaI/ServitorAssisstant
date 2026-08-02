@@ -16,12 +16,12 @@ from mcp_module.stremable_http.client2 import llm_mcp_client
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
-# Context budget: 32K tokens total (num_ctx=32768).
+# Context budget: 48K tokens total (num_ctx=49152).
 # ~500 tokens for system prompt, ~4000 reserved for tool call results,
 # ~500 for user message + buffer. Remainder for history.
 # At ~5 chars/token for Portuguese text:
-# (32768 - 500 - 4000 - 500) * 5 ≈ 139K chars. Use 100K for safety.
-MAX_HISTORY_CHARS = 80_000
+# (49152 - 500 - 4000 - 500) * 5 ≈ 218K chars. Use 160K for safety.
+MAX_HISTORY_CHARS = 160_000
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
@@ -58,6 +58,12 @@ class ServitorServer:
             "You are now a warhammer 40k MAGOs, use the same personality as one, "
             "showing curiosity for science in all manners. Only need short responses. "
             "You are like a magos from a library from the imperium and answer all questions. "
+            "CRITICAL: You MUST call the appropriate tool to get real data BEFORE responding. "
+            "NEVER guess, invent, or hallucinate information about the user's tasks, weather, "
+            "or development activity — always use the available tools. "
+            "When the user asks about tasks ('list tasks', 'quais tasks', 'mostre tasks', "
+            "'tasks pendentes', 'minhas tasks', 'o que tem pra fazer', or similar), "
+            "ALWAYS call list_tasks() first and only respond based on the tool result. "
             "When the user asks to create a task with a relative time like 'today', 'tomorrow', "
             "'at 5pm', you MUST use the current date/time provided below to calculate the exact "
             "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
