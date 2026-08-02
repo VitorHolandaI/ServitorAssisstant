@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import './App.css';
 import TasksPage from './TasksPage';
 
@@ -6,6 +6,8 @@ type View = 'chat' | 'tasks';
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${import.meta.env.VITE_SERVER_IP}:8000`;
 const API_STREAM = `${API_BASE}/stream_message`;
+const MAX_CTX_TOKENS = 49152;
+const CHARS_PER_TOKEN = 5;
 
 interface Message {
   id: string;
@@ -24,6 +26,25 @@ const ThinkingBlock = ({ content }: { content: string }) => {
         <span>Cogitating…</span>
       </button>
       {open && <pre className="thinking-content">{content}</pre>}
+    </div>
+  );
+};
+
+const estimateTokens = (text: string) => Math.ceil(text.length / CHARS_PER_TOKEN);
+const CTX_WARN = 0.75;
+const CTX_CRIT = 0.9;
+
+const ContextBar = ({ messages }: { messages: Message[] }) => {
+  const used = useMemo(() => {
+    const total = messages.reduce((acc, m) => acc + estimateTokens(m.text + (m.thinking || '')), 0);
+    return total;
+  }, [messages]);
+  const pct = Math.min(used / MAX_CTX_TOKENS, 1);
+  const color = pct >= CTX_CRIT ? '#ff4444' : pct >= CTX_WARN ? '#ffaa00' : '#44cc44';
+  return (
+    <div className="context-bar" title={`~${used.toLocaleString()} / ${MAX_CTX_TOKENS.toLocaleString()} tokens`}>
+      <div className="context-bar-fill" style={{ width: `${pct * 100}%`, background: color }} />
+      <span className="context-bar-text">{Math.round(pct * 100)}%</span>
     </div>
   );
 };
@@ -71,6 +92,34 @@ const App: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputValue.trim() || isLoading) return;
+
+    const text = inputValue.trim();
+
+    if (text === '/compact') {
+      setIsLoading(true);
+      try {
+        const resp = await fetch(`${API_BASE}/compact_conversation`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const compactText = data.compact || data.response || '(compacted)';
+          setMessages([{
+            id: Date.now().toString(),
+            text: `${compactText}\n\n— Conversation compacted —`,
+            sender: 'bot',
+            timestamp: new Date(),
+          }]);
+        }
+      } catch (err) {
+        console.warn('[chat] compact error:', err);
+      } finally {
+        setInputValue('');
+        setIsLoading(false);
+      }
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -165,6 +214,7 @@ const App: React.FC = () => {
             <span className="header-cog">⚙</span>
           </div>
           <div className="header-sub">Adeptus Mechanicus Interface</div>
+          <ContextBar messages={messages} />
           <div className="view-tabs">
             <button
               className={`tab ${view === 'chat' ? 'active' : ''}`}

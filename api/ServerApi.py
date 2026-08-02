@@ -194,6 +194,19 @@ async def clear_conversation():
     return {"status": "cleared"}
 
 
+@app.post("/compact_conversation")
+async def compact_conversation():
+    logger.info("[API] compacting conversation")
+    if Servitor is None:
+        return {"compact": "Servitor not ready."}
+    try:
+        compact = await Servitor.compact_conversation()
+        return {"compact": compact}
+    except Exception as e:
+        logger.error(f"[API] compact error: {e}", exc_info=DEBUG)
+        return {"compact": f"Error compacting: {e}"}
+
+
 @app.get("/check_reminders")
 async def check_reminders():
     reminded = await Servitor.check_due_reminders()

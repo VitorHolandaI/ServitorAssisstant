@@ -282,6 +282,36 @@ class ServitorServer:
 
         return reminded
 
+    async def compact_conversation(self) -> str:
+        history = self._load_history()
+        if not history:
+            return "No conversation to compact."
+
+        convo_text = "\n".join(f"{r}: {c[:200]}" for r, c, _ in history)
+        prompt = (
+            "Compacte a conversa abaixo em um resumo conciso em português, "
+            "preservando todas as informações importantes, decisões tomadas, "
+            "e o contexto necessário para continuar a conversa. "
+            "Mantenha o tom de Warhammer 40k Magos. Seja breve.\n\n"
+            f"{convo_text}"
+        )
+
+        response = await self.process_ollama(prompt)
+        if response in ("Some error occurred", None):
+            return "Compact failed."
+
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM messages")
+        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute(
+            "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
+            ("assistant", response, now)
+        )
+        conn.commit()
+        conn.close()
+        logger.info(f"[Server] conversation compacted: {len(response)} chars")
+        return response
+
     def send_audio_bytes(self, audio_bytes):
         url = f"http://{self.client_ip}:8000/play_file"
         logger.debug(f"[Server] send_audio_bytes to {url}")
