@@ -348,9 +348,7 @@ async def list_tasks(show_completed: bool = False, limit: int = 20) -> str:
         for t in tasks:
             status = "(Done)" if t['is_completed'] else ""
             due = f" | Due: {t['due_at']}" if t['due_at'] else ""
-            desc_raw = (t['description'] or "")[:80]
-            desc = f" - {desc_raw}" if desc_raw else ""
-            lines.append(f"[{t['id']}] {t['title']}{desc}{due} {status}")
+            lines.append(f"[{t['id']}] {t['title']}{due} {status}")
         return "\n".join(lines)
 
 
