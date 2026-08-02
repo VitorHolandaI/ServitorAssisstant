@@ -21,7 +21,7 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 # ~500 for user message + buffer. Remainder for history.
 # At ~5 chars/token for Portuguese text:
 # (32768 - 500 - 4000 - 500) * 5 ≈ 139K chars. Use 100K for safety.
-MAX_HISTORY_CHARS = 100_000
+MAX_HISTORY_CHARS = 80_000
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
