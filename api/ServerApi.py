@@ -116,10 +116,14 @@ async def stream_message(data: Dict[str, Any]):
         """Runs as independent background task — survives client disconnect."""
         full_response = ""
         try:
-            async for chunk_type, chunk in Servitor.process_ollama_stream(message):
-                await queue.put((chunk_type, chunk))
-                if chunk_type == "text":
-                    full_response += chunk
+            async with asyncio.timeout(300):
+                async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                    await queue.put((chunk_type, chunk))
+                    if chunk_type == "text":
+                        full_response += chunk
+        except asyncio.TimeoutError:
+            logger.error("[API] producer timed out after 300s")
+            await queue.put(("error", "Request timed out after 300 seconds"))
         except Exception as e:
             logger.error(f"[API] producer error: {e}", exc_info=DEBUG)
             await queue.put(("error", str(e)))

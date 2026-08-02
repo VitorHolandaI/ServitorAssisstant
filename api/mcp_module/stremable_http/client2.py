@@ -47,12 +47,12 @@ class llm_mcp_client():
                 all_tools.extend(tools)
 
             logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
-            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=-1)
+            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=-1, timeout=120, num_ctx=32768, model_kwargs={"think": False})
             prompt = system_prompt or self.prompt
             agent = create_react_agent(llm, all_tools, prompt=prompt)
             try:
                 msgs = _build_messages(message, history)
-                response = await agent.ainvoke({"messages": msgs})
+                response = await asyncio.wait_for(agent.ainvoke({"messages": msgs}), timeout=120)
 
                 tool_calls_used = []
                 for msg in response["messages"]:
@@ -78,7 +78,7 @@ class llm_mcp_client():
                 all_tools.extend(tools)
 
             logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
-            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=-1)
+            llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive=-1, timeout=120, num_ctx=32768, model_kwargs={"think": False})
             prompt = system_prompt or self.prompt
             agent = create_react_agent(llm, all_tools, prompt=prompt)
             try:

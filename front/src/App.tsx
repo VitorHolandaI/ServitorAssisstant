@@ -51,7 +51,7 @@ const App: React.FC = () => {
           })));
         }
       })
-      .catch(() => {});
+      .catch(err => console.warn('Failed to load conversation:', err));
   }, []);
 
   useEffect(() => {
@@ -59,7 +59,7 @@ const App: React.FC = () => {
   }, [messages]);
 
   const handleClearConversation = async () => {
-    await fetch(`${API_BASE}/conversation`, { method: 'DELETE' }).catch(() => {});
+    await fetch(`${API_BASE}/conversation`, { method: 'DELETE' }).catch(err => console.warn('Failed to clear conversation:', err));
     setMessages([{
       id: Date.now().toString(),
       text: 'Praise the Omnissiah. How may I assist you?',
@@ -102,6 +102,7 @@ const App: React.FC = () => {
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let streamDone = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -114,7 +115,7 @@ const App: React.FC = () => {
           if (!line.startsWith('data: ')) continue;
           try {
             const parsed = JSON.parse(line.slice(6));
-            if (parsed.done) break;
+            if (parsed.done) { streamDone = true; break; }
             if (!parsed.content) continue;
 
             if (parsed.type === 'thinking') {
@@ -132,15 +133,22 @@ const App: React.FC = () => {
             }
           } catch { /* skip malformed */ }
         }
+        if (streamDone) break;
       }
     } catch (error) {
       const isTimeout = error instanceof DOMException && error.name === 'AbortError';
+      const msg = isTimeout
+        ? 'Request timed out after 10 minutes.'
+        : error instanceof Error
+          ? `Error: ${error.message}`
+          : 'An error occurred. Please try again.';
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
-        text: isTimeout ? 'Request timed out.' : 'An error occurred. Please try again.',
+        text: msg,
         sender: 'bot',
         timestamp: new Date(),
       }]);
+      console.warn('[chat] fetch error:', error);
     } finally {
       clearTimeout(timeoutId);
       setIsLoading(false);

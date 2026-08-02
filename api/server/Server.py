@@ -73,7 +73,7 @@ class ServitorServer:
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
             mcp_addresses=[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES],
-            model_name="lfm2.5-thinking:latest",
+            model_name="qwen3.5:2b",
             model_address=ollama_host,
             system_prompt=self.base_prompt
         )
