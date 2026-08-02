@@ -16,9 +16,12 @@ from mcp_module.stremable_http.client2 import llm_mcp_client
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
-# lfm2.5-thinking:latest has 32K token context window.
-# Reserve 4K for system prompt + response; ~28K for history ≈ 112K chars.
-MAX_HISTORY_CHARS = 112_000
+# Context budget: 32K tokens total (num_ctx=32768).
+# ~500 tokens for system prompt, ~4000 reserved for tool call results,
+# ~500 for user message + buffer. Remainder for history.
+# At ~5 chars/token for Portuguese text:
+# (32768 - 500 - 4000 - 500) * 5 ≈ 139K chars. Use 100K for safety.
+MAX_HISTORY_CHARS = 100_000
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
