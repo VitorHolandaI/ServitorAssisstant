@@ -49,6 +49,7 @@ class NextcloudTasksClient:
         timezone: str = "America/Recife",
         task_calendar: str | None = None,
         reminder_calendar: str | None = None,
+        tls_verify: bool | str | None = None,
         session: requests.Session | None = None,
     ):
         try:
@@ -64,11 +65,7 @@ class NextcloudTasksClient:
         self.reminder_calendar = reminder_calendar
         self.session = session or requests.Session()
         self.session.auth = (username, app_password)
-        self.session.verify = (
-            os.getenv("NC_CA_BUNDLE")
-            or ssl.get_default_verify_paths().cafile
-            or True
-        )
+        self.session.verify = tls_verify if tls_verify is not None else _default_ca_bundle()
         self.session.headers.update({"User-Agent": "ServitorAssistant/1.0"})
 
     @classmethod
@@ -80,6 +77,13 @@ class NextcloudTasksClient:
             raise NextcloudError(
                 f"Missing Nextcloud environment variables: {', '.join(missing)}"
             )
+        tls_verify_value = os.getenv("NC_TLS_VERIFY", "true").strip().lower()
+        if tls_verify_value in {"true", "1", "yes", "on"}:
+            tls_verify = _default_ca_bundle()
+        elif tls_verify_value in {"false", "0", "no", "off"}:
+            tls_verify = False
+        else:
+            raise NextcloudError("NC_TLS_VERIFY must be true or false")
         return cls(
             base_url=os.environ["NC_URL"],
             username=os.environ["NC_USER"],
@@ -87,6 +91,7 @@ class NextcloudTasksClient:
             timezone=os.getenv("NC_TIMEZONE", "America/Recife"),
             task_calendar=os.getenv("NC_TASK_CALENDAR") or None,
             reminder_calendar=os.getenv("NC_REMINDER_CALENDAR") or None,
+            tls_verify=tls_verify,
         )
 
     def _request(self, method: str, url: str, **kwargs) -> bytes:
@@ -94,6 +99,11 @@ class NextcloudTasksClient:
             response = self.session.request(method, url, timeout=30, **kwargs)
             response.raise_for_status()
             return response.content
+        except requests.exceptions.SSLError as error:
+            raise NextcloudError(
+                "Nextcloud TLS verification failed; configure NC_CA_BUNDLE or "
+                "set NC_TLS_VERIFY=false for a trusted private network"
+            ) from error
         except requests.HTTPError as error:
             status = error.response.status_code if error.response is not None else "unknown"
             raise NextcloudError(
@@ -457,6 +467,15 @@ def _unfold_ical(text: str) -> list[str]:
         else:
             unfolded.append(line)
     return unfolded
+
+
+def _default_ca_bundle() -> bool | str:
+    return (
+        os.getenv("NC_CA_BUNDLE")
+        or os.getenv("REQUESTS_CA_BUNDLE")
+        or ssl.get_default_verify_paths().cafile
+        or True
+    )
 
 
 def _parse_vtodos(text: str) -> list[dict]:

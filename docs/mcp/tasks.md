@@ -39,6 +39,9 @@ Configuration is loaded from the repository-root `.env` using
 `NC_TASK_CALENDAR` and `NC_REMINDER_CALENDAR` are optional selectors for
 accounts with ambiguous calendar choices. TLS verification uses the operating
 system trust store; `NC_CA_BUNDLE` can point to a private CA file when needed.
+For a trusted private network with a self-signed certificate,
+`NC_TLS_VERIFY=false` disables certificate verification explicitly. Installing
+the private CA and keeping verification enabled is preferred.
 
 ## Local SQLite Tools
 

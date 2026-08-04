@@ -33,7 +33,10 @@ class FakeSession:
         self.requests.append((method, url, kwargs))
         if not self.responses:
             raise AssertionError(f"Unexpected request: {method} {url}")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def calendar_response(
@@ -112,6 +115,26 @@ class NextcloudTasksClientTest(unittest.TestCase):
     def test_rejects_insecure_nextcloud_url(self):
         with self.assertRaisesRegex(NextcloudError, "must use HTTPS"):
             NextcloudTasksClient("http://cloud.example.com", "vitor", "secret")
+
+    def test_allows_explicit_tls_verification_override(self):
+        client, session = self.make_client([])
+        insecure_client = NextcloudTasksClient(
+            "https://cloud.example.com",
+            "vitor",
+            "secret",
+            tls_verify=False,
+            session=cast(requests.Session, session),
+        )
+
+        self.assertFalse(insecure_client.session.verify)
+
+    def test_tls_error_explains_available_configuration(self):
+        client, _ = self.make_client(
+            [requests.exceptions.SSLError("certificate verify failed")]
+        )
+
+        with self.assertRaisesRegex(NextcloudError, "configure NC_CA_BUNDLE"):
+            client.discover_calendars()
 
     def test_parser_ignores_valarm_fields(self):
         data = """BEGIN:VCALENDAR\r
