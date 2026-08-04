@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-load_dotenv(PROJECT_ROOT / "api" / ".env")
+load_dotenv(PROJECT_ROOT / ".env")
 
 MCP_HOST = os.getenv("DEV_ACTIVITY_MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("DEV_ACTIVITY_MCP_PORT", "8002"))
@@ -295,7 +295,7 @@ async def dev_activity_help() -> str:
     return (
         "Ferramentas disponiveis:\n"
         "- summarize_weekly_dev_activity(platform='all'): resume sua atividade da semana atual em GitHub, Gitea ou ambos.\n"
-        "Configuracao em api/.env:\n"
+        "Configuracao em .env na raiz do repositorio:\n"
         "- GITHUB_USERNAME, GITHUB_TOKEN opcional, GITHUB_API_URL opcional\n"
         "- GITEA_USERNAME, GITEA_TOKEN opcional, GITEA_BASE_URL\n"
         "- MCP_EXTRA_ADDRESSES=http://localhost:8002/mcp para o backend consumir este MCP extra."

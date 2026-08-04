@@ -66,8 +66,8 @@ echo ""
 
 log "Starting general MCP server on :8001 ..."
 (
-    cd "$ROOT_DIR/api/mcp_module/stremable_http"
-    uv run --project "$ROOT_DIR" python stream2.py 2>&1 | tee "$ROOT_DIR/logs/mcp.log" | sed "s/^/${CYAN}[MCP]${NC} /"
+    cd "$ROOT_DIR/api"
+    uv run --project "$ROOT_DIR" python -m mcp_module.stremable_http.stream2 2>&1 | tee "$ROOT_DIR/logs/mcp.log" | sed "s/^/${CYAN}[MCP]${NC} /"
 ) &
 MCP_PID=$!
 PIDS+=($MCP_PID)

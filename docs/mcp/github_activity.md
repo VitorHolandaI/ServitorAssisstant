@@ -18,7 +18,7 @@ Builds a summary of your activity in the current week, from Monday 00:00 until n
 
 ## Required config
 
-Set these in `api/.env`:
+Set these in the repository-root `.env`:
 
 ```env
 MCP_EXTRA_ADDRESSES=http://localhost:8002/mcp

@@ -6,7 +6,7 @@ Uses a pure Python UDP broadcast — no `etherwake`, no root required.
 
 ## Configuration
 
-Set in `api/.env`:
+Set in the repository-root `.env`:
 
 ```env
 WAKE_MAC=your:mac:here

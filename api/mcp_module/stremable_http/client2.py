@@ -4,7 +4,7 @@ import logging
 import contextlib
 from mcp import ClientSession
 from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import create_react_agent
 from mcp.client.streamable_http import streamablehttp_client
@@ -13,8 +13,12 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 logger = logging.getLogger(__name__)
 
 
-def _build_messages(message: str, history: list | None) -> list:
-    msgs = []
+def _build_messages(
+    message: str,
+    history: list | None,
+    system_prompt: str | None = None,
+) -> list:
+    msgs = [SystemMessage(content=system_prompt)] if system_prompt else []
     for role, content, created_at in (history or []):
         if role == "user":
             msgs.append(HumanMessage(content=f"[{created_at}] {content}"))
@@ -22,7 +26,7 @@ def _build_messages(message: str, history: list | None) -> list:
             msgs.append(AIMessage(content=f"[{created_at}] {content}"))
     msgs.append(HumanMessage(content=message))
     if DEBUG:
-        logger.debug(f"[client2] built {len(msgs)} messages ({len(history or [])} history + 1 current)")
+        logger.debug(f"[client2] built {len(msgs)} messages ({len(history or [])} history + current prompt/message)")
     return msgs
 
 
@@ -53,7 +57,7 @@ class llm_mcp_client():
             all_tools.extend(tools)
 
         logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
-        self._agent = create_react_agent(self._llm, all_tools, prompt=self.prompt)
+        self._agent = create_react_agent(self._llm, all_tools)
 
     async def _recreate_agent(self):
         await self.cleanup()
@@ -71,7 +75,7 @@ class llm_mcp_client():
         try:
             await self._ensure_agent()
             prompt = system_prompt or self.prompt
-            msgs = _build_messages(message, history)
+            msgs = _build_messages(message, history, prompt)
             response = await asyncio.wait_for(self._agent.ainvoke({"messages": msgs}), timeout=120)
 
             tool_calls_used = []
@@ -91,7 +95,7 @@ class llm_mcp_client():
         try:
             await self._ensure_agent()
             prompt = system_prompt or self.prompt
-            msgs = _build_messages(message, history)
+            msgs = _build_messages(message, history, prompt)
             in_tool_call = False
             async for event in self._agent.astream_events({"messages": msgs}, version="v2"):
                 event_type = event["event"]

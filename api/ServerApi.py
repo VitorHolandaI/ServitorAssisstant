@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 
 import uvicorn
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 DB_PATH = Path(__file__).parent.parent / "data" / "tasks.db"
 CLIENT_IP = os.getenv("CLIENT_IP", "192.168.0.22")

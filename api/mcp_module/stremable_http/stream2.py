@@ -1,4 +1,5 @@
 from mcp.server.fastmcp import FastMCP
+import asyncio
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
@@ -9,12 +10,16 @@ import os
 import socket
 from pathlib import Path
 from dotenv import load_dotenv
+from .nextcloud_tasks import (
+    NextcloudError,
+    NextcloudTasksClient,
+)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 DB_PATH = PROJECT_ROOT / "data" / "tasks.db"
 DB_PATH.parent.mkdir(exist_ok=True)
 
-load_dotenv(Path(__file__).parent.parent.parent / ".env")
+load_dotenv(PROJECT_ROOT / ".env")
 
 mcp = FastMCP("GeneralAssistant", host="0.0.0.0", port=8001, stateless_http=True)
 
@@ -61,7 +66,10 @@ print(f"[MCP] DB initialized at {DB_PATH}")
 
 # ── Weather tools ───────────────────────────────────────────────
 
-cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+cache_session = requests_cache.CachedSession(
+    str(PROJECT_ROOT / "data" / "weather_cache"),
+    expire_after=3600,
+)
 retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
 openmeteo = openmeteo_requests.Client(session=retry_session)
 
@@ -96,6 +104,18 @@ get_weekly_forecast(latitude?, longitude?)
   Returns: per-day min/max temp, total rain, max wind
 
 ── TASKS ───────────────────────────────────────────
+list_nextcloud_tasks(show_completed?, limit?)
+  — Lists Nextcloud tasks with bounded output (default 10, maximum 20)
+  — Returns only title, short description, due time, status, and short UID
+
+create_nextcloud_task(title*, due_at*, description?, reminder_minutes_before?)
+  title:                   string, REQUIRED
+  due_at:                  string, REQUIRED — format: 'YYYY-MM-DD HH:MM:SS'
+  description:             string, optional
+  reminder_minutes_before: int, optional — default 0 (at due time)
+  — Creates a Nextcloud VTODO plus a linked VEVENT reminder
+
+── LOCAL SQLITE TASKS ──────────────────────────────
 create_task(title*, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
   title:                  string, REQUIRED
   description:            string, optional
@@ -250,31 +270,88 @@ async def get_weekly_forecast(latitude: float = -7.23071810, longitude: float = 
 # ── Task tools ──────────────────────────────────────────────────
 
 @mcp.tool()
+async def list_nextcloud_tasks(
+    show_completed: bool = False,
+    limit: int = 10,
+) -> str:
+    """List Nextcloud tasks without flooding the agent context.
+
+    Use this tool by default for requests about the user's tasks. It returns at
+    most 20 tasks and includes only a short UID, title, short description, due
+    time, and status. Completed tasks are excluded by default.
+    """
+    print(
+        f"[MCP] list_nextcloud_tasks: show_completed={show_completed}, limit={limit}"
+    )
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(client.list_tasks, show_completed, limit)
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+
+
+@mcp.tool()
+async def create_nextcloud_task(
+    title: str,
+    due_at: str,
+    description: str | None = None,
+    reminder_minutes_before: int = 0,
+) -> str:
+    """Create a Nextcloud task with a server-compatible event alarm.
+
+    Use this tool by default when the user asks to create a task or reminder.
+    due_at must be an exact local date and time in 'YYYY-MM-DD HH:MM:SS'
+    format. reminder_minutes_before controls how many minutes before due time
+    the alarm fires; 0 means at the due time. The tool creates both a
+    VTODO in Nextcloud Tasks and a linked transparent VEVENT because Nextcloud
+    server reminders do not process VTODO alarms.
+    """
+    print(f"[MCP] create_nextcloud_task: {title}")
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(
+            client.create_task,
+            title,
+            due_at,
+            description,
+            reminder_minutes_before,
+        )
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+
+@mcp.tool()
 async def task_help() -> str:
     """Returns info about all available task management commands. Call this when the user asks what they can do with tasks."""
     return (
-        "Task Manager - Available commands:\n\n"
-        "1. create_task(title, description, due_at, recurrence_type, recurrence_interval, ...)\n"
+        "Task Manager - Nextcloud commands (use these by default):\n\n"
+        "1. create_nextcloud_task(title, due_at, description, reminder_minutes_before)\n"
+        "   - Creates a Nextcloud task and linked calendar reminder.\n"
+        "   - due_at format: 'YYYY-MM-DD HH:MM:SS'\n"
+        "   - reminder_minutes_before defaults to 0 (at due time).\n\n"
+        "2. list_nextcloud_tasks(show_completed=False, limit=10)\n"
+        "   - Lists at most 20 tasks with compact descriptions.\n\n"
+        "Local SQLite commands (only when explicitly requested):\n"
+        "3. create_task(title, description, due_at, recurrence_type, recurrence_interval, ...)\n"
         "   - Creates a new task. due_at format: 'YYYY-MM-DD HH:MM:SS'\n"
         "   - recurrence_type: 'none', 'daily', 'weekly', 'monthly'\n"
         "   - recurrence_interval: e.g. 2 means every 2 days/weeks/months\n"
         "   - recurrence_day_of_week: 0=Sun, 1=Mon, ..., 6=Sat\n"
         "   - recurrence_day_of_month: 1-31\n\n"
-        "2. list_tasks(show_completed=False, limit=20)\n"
+        "4. list_tasks(show_completed=False, limit=20)\n"
         "   - Lists tasks. By default only shows incomplete ones.\n\n"
-        "3. get_task(task_id)\n"
+        "5. get_task(task_id)\n"
         "   - Shows full details of a single task.\n\n"
-        "4. update_task(task_id, title, description, due_at, ...)\n"
+        "6. update_task(task_id, title, description, due_at, ...)\n"
         "   - Updates any field of an existing task.\n\n"
-        "5. complete_task(task_id)\n"
+        "7. complete_task(task_id)\n"
         "   - Marks a task as done. If recurring, auto-creates the next one.\n\n"
-        "6. delete_task(task_id)\n"
+        "8. delete_task(task_id)\n"
         "   - Permanently deletes a task.\n\n"
         "Examples:\n"
         "  - 'Create a task to buy groceries tomorrow at 10am'\n"
-        "  - 'Create a daily recurring task to check server logs'\n"
+        "  - 'Remind me 30 minutes before server maintenance tomorrow at 10am'\n"
         "  - 'List my tasks'\n"
-        "  - 'Complete task 1'"
+        "  - 'Complete local task 1'"
     )
 
 
@@ -484,7 +561,7 @@ async def wake_on_lan() -> str:
     """Send a Wake-on-LAN magic packet to wake up the configured machine. No arguments needed."""
     mac = os.getenv("WAKE_MAC")
     if not mac:
-        return "Error: WAKE_MAC not set in api/.env"
+        return "Error: WAKE_MAC not set in repository-root .env"
     try:
         mac_bytes = bytes.fromhex(mac.replace(":", "").replace("-", ""))
         if len(mac_bytes) != 6:

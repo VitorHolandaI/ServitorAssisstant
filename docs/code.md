@@ -108,7 +108,7 @@ Tools exposed to the LLM:
 
 ## Configuration
 
-All config lives in `api/.env` (copy from `api/.env.example`):
+All config lives in `.env` at the repository root (copy from `.env.example`):
 
 | Variable | Purpose |
 |----------|---------|
@@ -131,7 +131,7 @@ Frontend config in `front/.env`:
 ## Running locally (no Docker)
 
 ```bash
-cp api/.env.example api/.env   # fill in your values
+cp .env.example .env   # fill in your values
 ./start.sh                     # starts MCP server, API, and frontend
 ```
 

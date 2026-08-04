@@ -24,17 +24,17 @@ voice_models/
   en_US-ryan-medium.onnx.json
 ```
 
-> Other voices available at https://huggingface.co/rhasspy/piper-voices — update `VOICE_PATH` in `api/.env` to match.
+> Other voices available at https://huggingface.co/rhasspy/piper-voices — update `VOICE_PATH` in `.env` to match.
 
 ---
 
 ## 2. Configure
 
 ```bash
-cp api/.env.example api/.env
+cp .env.example .env
 ```
 
-Edit `api/.env` — minimum required values:
+Edit `.env` in the repository root — minimum required values:
 
 ```env
 VOICE_PATH=/app/voice_models/en_US-ryan-medium.onnx
@@ -122,7 +122,7 @@ HTTP_PORT=8080
 
 | Symptom | Fix |
 |---------|-----|
-| `VOICE_PATH not set` | Check `api/.env` has `VOICE_PATH` and `voice_models/` is populated |
+| `VOICE_PATH not set` | Check `.env` has `VOICE_PATH` and `voice_models/` is populated |
 | Ollama healthcheck failing | Model is still downloading — `docker compose logs ollama` to watch |
 | `Sorry, I encountered an error` | Backend/MCP not ready yet — wait and retry |
 | Port 80 in use | Set `HTTP_PORT=8080` in `.env` |

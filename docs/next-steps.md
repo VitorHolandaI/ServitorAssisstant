@@ -6,7 +6,7 @@
   ```bash
   pip install proxmoxer
   ```
-- [ ] Add Proxmox env vars to `api/.env.example`
+- [ ] Add Proxmox env vars to `.env.example`
   ```env
   PROXMOX_HOST=192.168.0.1
   PROXMOX_USER=user@pam

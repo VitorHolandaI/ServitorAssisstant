@@ -23,7 +23,7 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 # (32768 - 500 - 4000 - 500) * 5 ≈ 139K chars. Use 80K for safety.
 MAX_HISTORY_CHARS = 80_000
 
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
 server_ip = os.getenv("SERVER_IP", "localhost")
 MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
@@ -48,7 +48,7 @@ class ServitorServer:
         self.agent = ""
 
         if not voice_path:
-            raise ValueError("VOICE_PATH not set in api/.env")
+            raise ValueError("VOICE_PATH not set in repository-root .env")
         self.voice = PiperVoice.load(voice_path)
         logger.info(f"[Server] voice model loaded from {voice_path}")
         self.initial_agent()
@@ -63,7 +63,9 @@ class ServitorServer:
             "or development activity — always use the available tools. "
             "When the user asks about tasks ('list tasks', 'quais tasks', 'mostre tasks', "
             "'tasks pendentes', 'minhas tasks', 'o que tem pra fazer', or similar), "
-            "ALWAYS call list_tasks() first and only respond based on the tool result. "
+            "ALWAYS call list_nextcloud_tasks() first and only respond based on the tool result. "
+            "When the user asks to create a task or reminder, use create_nextcloud_task(). "
+            "Only use the SQLite task tools when the user explicitly asks for a local task. "
             "When the user asks to create a task with a relative time like 'today', 'tomorrow', "
             "'at 5pm', you MUST use the current date/time provided below to calculate the exact "
             "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
