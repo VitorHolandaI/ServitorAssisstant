@@ -1,6 +1,8 @@
 *.vim
 *.wav
 env/
+.venv/
+venv/
 en/
 __pycache__/
 logs/
