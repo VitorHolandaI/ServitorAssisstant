@@ -104,19 +104,38 @@ get_weekly_forecast(latitude?, longitude?)
   Returns: per-day min/max temp, total rain, max wind
 
 ── TASKS ───────────────────────────────────────────
-list_nextcloud_tasks(show_completed?, limit?)
+list_nextcloud_events(date?, limit?)
+  — Lists Nextcloud calendar events for a day (default: today)
+  date:  string, optional — format: 'YYYY-MM-DD'
+  limit: int, optional — default 10, maximum 20
+  — Includes the exact current local time and labels events as ended, ongoing, or upcoming
+
+list_nextcloud_tasks(show_completed?, limit?, calendar?)
   — Lists Nextcloud tasks with bounded output (default 10, maximum 20)
+  calendar: string, optional — exact Nextcloud task-list name
   — Returns only title, short description, due time, status, and short UID
 
-create_nextcloud_task(title*, due_at*, description?, reminder_minutes_before?)
+create_nextcloud_task(title*, due_at*, description?, reminder_minutes_before?, calendar?)
   title:                   string, REQUIRED
   due_at:                  string, REQUIRED — format: 'YYYY-MM-DD HH:MM:SS'
   description:             string, optional
   reminder_minutes_before: int, optional — default 0 (at due time)
   — Creates a Nextcloud VTODO plus a linked VEVENT reminder
 
-── LOCAL SQLITE TASKS ──────────────────────────────
-create_task(title*, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
+complete_nextcloud_task(task*)
+  task: string, REQUIRED — exact title, full UID, or short UID from the task list
+  — Marks an existing Nextcloud task as completed
+
+set_nextcloud_task_reminder(task*, reminder_minutes_before*, calendar?)
+  — Adds or replaces the Servitor reminder on an existing task
+
+get_nextcloud_task(task*, calendar?)       — Full details for one exact task
+update_nextcloud_task(task*, title?, description?, due_at?, status?, calendar?)
+delete_nextcloud_task(task*, calendar?)    — Permanently deletes one exact task
+move_nextcloud_task(task*, destination_calendar*, calendar?)
+
+── LOCAL SQLITE TASKS (ONLY WHEN EXPLICITLY REQUESTED) ───────────
+create_local_task(title*, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
   title:                  string, REQUIRED
   description:            string, optional
   due_at:                 string, optional — format: 'YYYY-MM-DD HH:MM:SS'
@@ -126,20 +145,20 @@ create_task(title*, description?, due_at?, recurrence_type?, recurrence_interval
   recurrence_day_of_month:int,    optional — 1–31 (monthly recurrence)
   timezone:               string, optional (default: 'America/Recife')
 
-list_tasks(show_completed?, limit?)
+list_local_tasks(show_completed?, limit?)
   show_completed: bool, optional — include done tasks (default: False)
   limit:          int,  optional — max results (default: 20)
 
-get_task(task_id*)
+get_local_task(task_id*)
   task_id: int, REQUIRED — ID of the task
 
-update_task(task_id*, title?, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
+update_local_task(task_id*, title?, description?, due_at?, recurrence_type?, recurrence_interval?, recurrence_day_of_week?, recurrence_day_of_month?, timezone?)
   task_id: int, REQUIRED — only provided fields are updated
 
-complete_task(task_id*)
+complete_local_task(task_id*)
   task_id: int, REQUIRED — marks done; if recurring, auto-creates next occurrence
 
-delete_task(task_id*)
+delete_local_task(task_id*)
   task_id: int, REQUIRED — permanently deletes task
 
 ── HELP ────────────────────────────────────────────
@@ -270,24 +289,58 @@ async def get_weekly_forecast(latitude: float = -7.23071810, longitude: float = 
 # ── Task tools ──────────────────────────────────────────────────
 
 @mcp.tool()
+async def list_nextcloud_events(
+    date: str | None = None,
+    limit: int = 10,
+) -> str:
+    """List Nextcloud calendar events for one local calendar day.
+
+    Call with no date for today's calendar. The tool reads the exact current
+    time at execution using NC_TIMEZONE and labels today's timed events as
+    ended, ongoing, or upcoming. Pass an explicit date only in YYYY-MM-DD
+    format. Recurring events are expanded only for the requested day. Output is
+    limited to 20 events and 4096 characters to protect the agent context.
+    """
+    print(f"[MCP] list_nextcloud_events: date={date}, limit={limit}")
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(client.list_events, date, limit)
+    except NextcloudError as error:
+        return f"Nextcloud calendar error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+@mcp.tool()
 async def list_nextcloud_tasks(
     show_completed: bool = False,
     limit: int = 10,
+    calendar: str | None = None,
 ) -> str:
     """List Nextcloud tasks without flooding the agent context.
 
     Use this tool by default for requests about the user's tasks. It returns at
     most 20 tasks and includes only a short UID, title, short description, due
-    time, and status. Completed tasks are excluded by default.
+    time, and status. Completed tasks are excluded by default. Set
+    show_completed=True only when the user explicitly asks to include completed
+    tasks or task history. "All tasks" still means all incomplete tasks,
+    including overdue tasks.
     """
     print(
         f"[MCP] list_nextcloud_tasks: show_completed={show_completed}, limit={limit}"
     )
+    client = None
     try:
         client = NextcloudTasksClient.from_env()
-        return await asyncio.to_thread(client.list_tasks, show_completed, limit)
+        return await asyncio.to_thread(
+            client.list_tasks, show_completed, limit, calendar
+        )
     except NextcloudError as error:
         return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
 
 
 @mcp.tool()
@@ -296,6 +349,7 @@ async def create_nextcloud_task(
     due_at: str,
     description: str | None = None,
     reminder_minutes_before: int = 0,
+    calendar: str | None = None,
 ) -> str:
     """Create a Nextcloud task with a server-compatible event alarm.
 
@@ -303,10 +357,11 @@ async def create_nextcloud_task(
     due_at must be an exact local date and time in 'YYYY-MM-DD HH:MM:SS'
     format. reminder_minutes_before controls how many minutes before due time
     the alarm fires; 0 means at the due time. The tool creates both a
-    VTODO in Nextcloud Tasks and a linked transparent VEVENT because Nextcloud
-    server reminders do not process VTODO alarms.
+    VTODO alarm visible in Nextcloud Tasks plus a linked transparent VEVENT for
+    server-side notification delivery.
     """
     print(f"[MCP] create_nextcloud_task: {title}")
+    client = None
     try:
         client = NextcloudTasksClient.from_env()
         return await asyncio.to_thread(
@@ -315,37 +370,197 @@ async def create_nextcloud_task(
             due_at,
             description,
             reminder_minutes_before,
+            calendar,
         )
     except NextcloudError as error:
         return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def set_nextcloud_task_reminder(
+    task: str,
+    reminder_minutes_before: int,
+    calendar: str | None = None,
+) -> str:
+    """Set a reminder on an existing Nextcloud task.
+
+    The reminder is written into the VTODO so it appears on the task and into
+    a linked transparent VEVENT for server-side delivery. The task needs a due
+    date, and the resulting reminder time must still be in the future.
+    """
+    print(
+        f"[MCP] set_nextcloud_task_reminder: task={task}, "
+        f"minutes={reminder_minutes_before}"
+    )
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(
+            client.set_task_reminder,
+            task,
+            reminder_minutes_before,
+            calendar,
+        )
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def complete_nextcloud_task(
+    task: str,
+    calendar: str | None = None,
+) -> str:
+    """Mark one existing Nextcloud task as completed.
+
+    task must be an exact task title, full UID, or short UID returned by
+    list_nextcloud_tasks. This tool updates the existing VTODO conditionally
+    using its ETag, so concurrent edits are not overwritten. Use this for
+    Nextcloud completion requests; never use complete_local_task unless the
+    user explicitly requests the local SQLite database.
+    """
+    print(f"[MCP] complete_nextcloud_task: {task}")
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(client.complete_task, task, calendar)
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def get_nextcloud_task(
+    task: str,
+    calendar: str | None = None,
+) -> str:
+    """Get full details for one Nextcloud task by exact title or UID."""
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(client.get_task, task, calendar)
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def update_nextcloud_task(
+    task: str,
+    title: str | None = None,
+    description: str | None = None,
+    due_at: str | None = None,
+    status: str | None = None,
+    calendar: str | None = None,
+) -> str:
+    """Update fields on one exact Nextcloud task.
+
+    due_at uses YYYY-MM-DD HH:MM:SS; pass an empty string to remove the due
+    date. description may be empty to clear it. status accepts needs-action,
+    in-process, completed, or cancelled. Concurrent changes are rejected.
+    """
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(
+            client.update_task,
+            task,
+            title,
+            description,
+            due_at,
+            status,
+            calendar,
+        )
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def delete_nextcloud_task(
+    task: str,
+    calendar: str | None = None,
+) -> str:
+    """Permanently delete one Nextcloud task by exact title or UID."""
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(client.delete_task, task, calendar)
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def move_nextcloud_task(
+    task: str,
+    destination_calendar: str,
+    calendar: str | None = None,
+) -> str:
+    """Move one exact Nextcloud task to another Nextcloud task list."""
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        return await asyncio.to_thread(
+            client.move_task, task, destination_calendar, calendar
+        )
+    except NextcloudError as error:
+        return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
 
 @mcp.tool()
 async def task_help() -> str:
     """Returns info about all available task management commands. Call this when the user asks what they can do with tasks."""
     return (
         "Task Manager - Nextcloud commands (use these by default):\n\n"
-        "1. create_nextcloud_task(title, due_at, description, reminder_minutes_before)\n"
+        "1. list_nextcloud_events(date=None, limit=10)\n"
+        "   - Lists a day's events; no date means today.\n"
+        "   - Includes exact current time and event timing state.\n\n"
+        "2. create_nextcloud_task(title, due_at, description, reminder_minutes_before)\n"
         "   - Creates a Nextcloud task and linked calendar reminder.\n"
         "   - due_at format: 'YYYY-MM-DD HH:MM:SS'\n"
         "   - reminder_minutes_before defaults to 0 (at due time).\n\n"
-        "2. list_nextcloud_tasks(show_completed=False, limit=10)\n"
+        "3. complete_nextcloud_task(task)\n"
+        "   - Completes a Nextcloud task by exact title or UID.\n\n"
+        "4. set_nextcloud_task_reminder(task, reminder_minutes_before, calendar=None)\n"
+        "   - Adds a task-visible reminder and linked event alarm.\n\n"
+        "5. list_nextcloud_tasks(show_completed=False, limit=10, calendar=None)\n"
         "   - Lists at most 20 tasks with compact descriptions.\n\n"
+        "6. get_nextcloud_task(task, calendar=None)\n"
+        "7. update_nextcloud_task(task, title, description, due_at, status, calendar)\n"
+        "8. delete_nextcloud_task(task, calendar=None)\n"
+        "9. move_nextcloud_task(task, destination_calendar, calendar=None)\n\n"
         "Local SQLite commands (only when explicitly requested):\n"
-        "3. create_task(title, description, due_at, recurrence_type, recurrence_interval, ...)\n"
+        "10. create_local_task(title, description, due_at, recurrence_type, recurrence_interval, ...)\n"
         "   - Creates a new task. due_at format: 'YYYY-MM-DD HH:MM:SS'\n"
         "   - recurrence_type: 'none', 'daily', 'weekly', 'monthly'\n"
         "   - recurrence_interval: e.g. 2 means every 2 days/weeks/months\n"
         "   - recurrence_day_of_week: 0=Sun, 1=Mon, ..., 6=Sat\n"
         "   - recurrence_day_of_month: 1-31\n\n"
-        "4. list_tasks(show_completed=False, limit=20)\n"
+        "11. list_local_tasks(show_completed=False, limit=20)\n"
         "   - Lists tasks. By default only shows incomplete ones.\n\n"
-        "5. get_task(task_id)\n"
+        "12. get_local_task(task_id)\n"
         "   - Shows full details of a single task.\n\n"
-        "6. update_task(task_id, title, description, due_at, ...)\n"
+        "13. update_local_task(task_id, title, description, due_at, ...)\n"
         "   - Updates any field of an existing task.\n\n"
-        "7. complete_task(task_id)\n"
+        "14. complete_local_task(task_id)\n"
         "   - Marks a task as done. If recurring, auto-creates the next one.\n\n"
-        "8. delete_task(task_id)\n"
+        "15. delete_local_task(task_id)\n"
         "   - Permanently deletes a task.\n\n"
         "Examples:\n"
         "  - 'Create a task to buy groceries tomorrow at 10am'\n"
@@ -355,7 +570,7 @@ async def task_help() -> str:
     )
 
 
-@mcp.tool()
+@mcp.tool("create_local_task")
 async def create_task(
     title: str,
     description: str = None,
@@ -367,7 +582,8 @@ async def create_task(
     timezone: str = 'America/Recife'
 ) -> str:
     """
-    Creates a new task.
+    Creates a local SQLite task. ONLY use this when the user explicitly asks
+    for a local or SQLite task; never use it for Nextcloud.
     :param title: The title of the task.
     :param description: Optional details about the task.
     :param due_at: The due date and time in 'YYYY-MM-DD HH:MM:SS' format.
@@ -405,10 +621,11 @@ async def create_task(
         return f"Task created with ID: {cursor.lastrowid}"
 
 
-@mcp.tool()
+@mcp.tool("list_local_tasks")
 async def list_tasks(show_completed: bool = False, limit: int = 20) -> str:
     """
-    Lists tasks. By default shows only incomplete tasks.
+    Lists local SQLite tasks. ONLY use this when the user explicitly asks for
+    local or SQLite tasks; never use it for Nextcloud Tasks or generic tasks.
     :param show_completed: If True, includes completed tasks.
     :param limit: Maximum number of tasks to return.
     """
@@ -431,10 +648,10 @@ async def list_tasks(show_completed: bool = False, limit: int = 20) -> str:
         return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool("get_local_task")
 async def get_task(task_id: int) -> str:
     """
-    Gets a single task by its ID.
+    Gets a local SQLite task by ID. Never use it for a Nextcloud task.
     :param task_id: The ID of the task to retrieve.
     """
     print(f"[MCP] get_task: id={task_id}")
@@ -456,7 +673,7 @@ async def get_task(task_id: int) -> str:
         )
 
 
-@mcp.tool()
+@mcp.tool("update_local_task")
 async def update_task(
     task_id: int,
     title: str = None,
@@ -469,7 +686,7 @@ async def update_task(
     timezone: str = None
 ) -> str:
     """
-    Updates an existing task. Only provided fields will be changed.
+    Updates a local SQLite task. Never use it for a Nextcloud task.
     :param task_id: The ID of the task to update.
     """
     print(f"[MCP] update_task: id={task_id}")
@@ -494,10 +711,10 @@ async def update_task(
         return f"Task {task_id} updated."
 
 
-@mcp.tool()
+@mcp.tool("complete_local_task")
 async def complete_task(task_id: int) -> str:
     """
-    Marks a task as completed. If recurring, creates the next occurrence.
+    Completes a local SQLite task. Never use it for a Nextcloud task.
     :param task_id: The ID of the task to complete.
     """
     print(f"[MCP] complete_task: id={task_id}")
@@ -541,10 +758,10 @@ async def complete_task(task_id: int) -> str:
         return f"Task {task_id} completed."
 
 
-@mcp.tool()
+@mcp.tool("delete_local_task")
 async def delete_task(task_id: int) -> str:
     """
-    Deletes a task.
+    Deletes a local SQLite task. Never use it for a Nextcloud task.
     :param task_id: The ID of the task to delete.
     """
     print(f"[MCP] delete_task: id={task_id}")

@@ -10,6 +10,7 @@ from urllib.parse import quote, unquote, urljoin, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 
@@ -66,6 +67,8 @@ class NextcloudTasksClient:
         self.session = session or requests.Session()
         self.session.auth = (username, app_password)
         self.session.verify = tls_verify if tls_verify is not None else _default_ca_bundle()
+        if self.session.verify is False:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.session.headers.update({"User-Agent": "ServitorAssistant/1.0"})
 
     @classmethod
@@ -112,6 +115,9 @@ class NextcloudTasksClient:
             ) from error
         except requests.RequestException as error:
             raise NextcloudError(f"Could not reach Nextcloud: {type(error).__name__}") from error
+
+    def close(self) -> None:
+        self.session.close()
 
     def discover_calendars(self) -> list[Calendar]:
         body = """<?xml version="1.0"?>
@@ -226,15 +232,70 @@ class NextcloudTasksClient:
         variable = "NC_TASK_CALENDAR" if component == "VTODO" else "NC_REMINDER_CALENDAR"
         raise NextcloudError(f"Set {variable}; available calendars: {names}")
 
+    def _task_calendars(
+        self,
+        calendars: list[Calendar],
+        selector: str | None = None,
+        writable: bool = False,
+    ) -> list[Calendar]:
+        compatible = [
+            calendar
+            for calendar in calendars
+            if (not calendar.components or "VTODO" in calendar.components)
+            and (not writable or calendar.writable)
+        ]
+        if not selector:
+            return compatible
+        wanted = selector.strip().casefold()
+        matches = [
+            calendar
+            for calendar in compatible
+            if wanted in {calendar.name.casefold(), calendar.slug.casefold()}
+        ]
+        if not matches:
+            names = ", ".join(calendar.name for calendar in compatible[:10])
+            raise NextcloudError(
+                f"Nextcloud task list not found: {selector}. Available lists: {names}"
+            )
+        if len(matches) > 1:
+            raise NextcloudError(f"Nextcloud task list is ambiguous: {selector}")
+        return matches
+
+    def _find_task(
+        self,
+        identifier: str,
+        calendar: str | None = None,
+        writable: bool = False,
+    ) -> tuple[dict, Calendar]:
+        identifier = _single_line(identifier).strip()
+        if not identifier:
+            raise NextcloudError("Task title or UID cannot be empty")
+        calendars = self.discover_calendars()
+        task_calendars = self._task_calendars(calendars, calendar, writable=writable)
+        tasks = []
+        calendars_by_url = {item.url: item for item in task_calendars}
+        for task_calendar in task_calendars:
+            tasks.extend(self._calendar_query(task_calendar, show_completed=True))
+        matches = _match_tasks(tasks, identifier)
+        if not matches:
+            raise NextcloudError(
+                f"No Nextcloud task matches title or UID: {identifier}"
+            )
+        if len(matches) > 1:
+            choices = ", ".join(
+                f"[{item.get('UID', 'unknown')[:8]}] {item.get('SUMMARY', 'Untitled')}"
+                for item in matches[:5]
+            )
+            raise NextcloudError(f"Task match is ambiguous; use a short UID: {choices}")
+        selected = matches[0]
+        return selected, calendars_by_url[selected["calendar_url"]]
+
     def _calendar_query(self, calendar: Calendar, show_completed: bool) -> list[dict]:
         completed_filter = ""
         if not show_completed:
             completed_filter = """
         <c:prop-filter name="COMPLETED">
           <c:is-not-defined/>
-        </c:prop-filter>
-        <c:prop-filter name="STATUS">
-          <c:text-match negate-condition="yes">CANCELLED</c:text-match>
         </c:prop-filter>"""
         body = f"""<?xml version="1.0"?>
 <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
@@ -247,9 +308,15 @@ class NextcloudTasksClient:
           <c:prop name="UID"/>
           <c:prop name="SUMMARY"/>
           <c:prop name="DESCRIPTION"/>
+          <c:prop name="DTSTART"/>
           <c:prop name="DUE"/>
           <c:prop name="STATUS"/>
           <c:prop name="COMPLETED"/>
+          <c:prop name="PERCENT-COMPLETE"/>
+          <c:prop name="CREATED"/>
+          <c:prop name="LAST-MODIFIED"/>
+          <c:prop name="CATEGORIES"/>
+          <c:prop name="PRIORITY"/>
         </c:comp>
       </c:comp>
     </c:calendar-data>
@@ -275,28 +342,98 @@ class NextcloudTasksClient:
         tasks = []
         for response in root.findall(f"{{{DAV}}}response"):
             href = response.findtext(f"{{{DAV}}}href", default="")
+            etag = response.findtext(f".//{{{DAV}}}getetag")
             calendar_data = response.findtext(f".//{{{CALDAV}}}calendar-data")
             if not calendar_data:
                 continue
             for task in _parse_vtodos(calendar_data):
-                if not show_completed and task.get("STATUS") == "CANCELLED":
+                if task.get("STATUS") == "CANCELLED":
                     continue
                 task["calendar"] = calendar.name
+                task["calendar_url"] = calendar.url
                 task["href"] = href
+                task["etag"] = etag
                 task["due_datetime"] = _parse_ical_datetime(
                     task.get("DUE"), task.get("DUE_parameters"), self.timezone
                 )
                 tasks.append(task)
         return tasks
 
-    def list_tasks(self, show_completed: bool = False, limit: int = 10) -> str:
+    def _calendar_event_query(
+        self,
+        calendar: Calendar,
+        range_start: datetime.datetime,
+        range_end: datetime.datetime,
+    ) -> list[dict]:
+        start_value = _format_utc(range_start)
+        end_value = _format_utc(range_end)
+        body = f"""<?xml version="1.0"?>
+<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+  <d:prop>
+    <d:getetag/>
+    <c:calendar-data>
+      <c:expand start="{start_value}" end="{end_value}"/>
+    </c:calendar-data>
+  </d:prop>
+  <c:filter>
+    <c:comp-filter name="VCALENDAR">
+      <c:comp-filter name="VEVENT">
+        <c:time-range start="{start_value}" end="{end_value}"/>
+      </c:comp-filter>
+    </c:comp-filter>
+  </c:filter>
+</c:calendar-query>"""
+        data = self._request(
+            "REPORT",
+            calendar.url,
+            data=body.encode(),
+            headers={"Depth": "1", "Content-Type": "application/xml"},
+        )
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError as error:
+            raise NextcloudError("Nextcloud returned invalid event XML") from error
+
+        events = []
+        calendar_timezone = ZoneInfo(calendar.timezone)
+        for response in root.findall(f"{{{DAV}}}response"):
+            href = response.findtext(f"{{{DAV}}}href", default="")
+            calendar_data = response.findtext(f".//{{{CALDAV}}}calendar-data")
+            if not calendar_data:
+                continue
+            for event in _parse_ical_components(calendar_data, "VEVENT"):
+                if event.get("STATUS") == "CANCELLED":
+                    continue
+                event["calendar"] = calendar.name
+                event["href"] = href
+                event["start_datetime"] = _parse_ical_datetime(
+                    event.get("DTSTART"),
+                    event.get("DTSTART_parameters"),
+                    calendar_timezone,
+                )
+                event["end_datetime"] = _parse_ical_datetime(
+                    event.get("DTEND"),
+                    event.get("DTEND_parameters"),
+                    calendar_timezone,
+                )
+                event["all_day"] = bool(
+                    event.get("DTSTART") and "T" not in event["DTSTART"]
+                )
+                if event["start_datetime"] is not None:
+                    events.append(event)
+        return events
+
+    def list_tasks(
+        self,
+        show_completed: bool = False,
+        limit: int = 10,
+        calendar: str | None = None,
+    ) -> str:
         limit = max(1, min(int(limit), MAX_TASKS))
         calendars = self.discover_calendars()
         tasks = []
-        for calendar in calendars:
-            if calendar.components and "VTODO" not in calendar.components:
-                continue
-            tasks.extend(self._calendar_query(calendar, show_completed))
+        for task_calendar in self._task_calendars(calendars, calendar):
+            tasks.extend(self._calendar_query(task_calendar, show_completed))
 
         tasks.sort(
             key=lambda task: (
@@ -319,6 +456,7 @@ class NextcloudTasksClient:
             line = f"[{uid}] {title} | {status}"
             if due:
                 line += f" | due {due}"
+            line += f" | list {task['calendar']}"
             description = _single_line(task.get("DESCRIPTION", ""))
             if len(description) > MAX_DESCRIPTION_CHARS:
                 description = description[: MAX_DESCRIPTION_CHARS - 3].rstrip() + "..."
@@ -333,6 +471,307 @@ class NextcloudTasksClient:
         if omitted:
             lines.append(f"{omitted} additional tasks omitted to protect agent context.")
         return "\n".join(lines)[:MAX_TOOL_OUTPUT_CHARS]
+
+    def list_events(self, date: str | None = None, limit: int = 10) -> str:
+        limit = max(1, min(int(limit), MAX_TASKS))
+        now = datetime.datetime.now(self.timezone)
+        if date is None:
+            query_date = now.date()
+        else:
+            try:
+                query_date = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+            except (TypeError, ValueError) as error:
+                raise NextcloudError("date must use YYYY-MM-DD format") from error
+
+        day_start = datetime.datetime.combine(
+            query_date, datetime.time.min, tzinfo=self.timezone
+        )
+        day_end = day_start + datetime.timedelta(days=1)
+        calendars = self.discover_calendars()
+        events = []
+        for calendar in calendars:
+            if calendar.components and "VEVENT" not in calendar.components:
+                continue
+            events.extend(self._calendar_event_query(calendar, day_start, day_end))
+
+        unique_events = {}
+        for event in events:
+            key = (
+                event["calendar"],
+                event.get("UID"),
+                event.get("RECURRENCE-ID"),
+                event.get("DTSTART"),
+            )
+            unique_events[key] = event
+        events = list(unique_events.values())
+        events.sort(
+            key=lambda event: (
+                not event["all_day"],
+                event["start_datetime"],
+                event.get("SUMMARY", "").casefold(),
+            )
+        )
+
+        is_today = query_date == now.date()
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S %Z")
+        if not events:
+            return (
+                f"No Nextcloud events found for {query_date.isoformat()}. "
+                f"Current time: {current_time}."
+            )
+
+        selected = events[:limit]
+        header = f"Calendar for {query_date.isoformat()}"
+        if is_today:
+            header += f" (current time {now.strftime('%H:%M:%S %Z')})"
+        lines = [f"{header}: showing {len(selected)} of {len(events)} events."]
+        shown = 0
+        now_utc = now.astimezone(datetime.UTC)
+        for event in selected:
+            start = event["start_datetime"]
+            end = event["end_datetime"]
+            if event["all_day"]:
+                time_label = "all day"
+                state = "today" if is_today else "scheduled"
+            else:
+                local_start = start.astimezone(self.timezone)
+                local_end = end.astimezone(self.timezone) if end else None
+                time_label = local_start.strftime("%H:%M")
+                if local_end:
+                    time_label += f"-{local_end.strftime('%H:%M')}"
+                effective_end = end or start + datetime.timedelta(minutes=1)
+                if not is_today:
+                    state = "scheduled"
+                elif start <= now_utc < effective_end:
+                    state = "ongoing"
+                elif start > now_utc:
+                    state = "upcoming"
+                else:
+                    state = "ended"
+
+            title = _single_line(event.get("SUMMARY") or "Untitled event")[:200]
+            line = f"[{state}] {time_label} | {title} | {event['calendar']}"
+            location = _single_line(event.get("LOCATION", ""))
+            if location:
+                line += f" | {location[:100]}"
+            description = _single_line(event.get("DESCRIPTION", ""))
+            if len(description) > MAX_DESCRIPTION_CHARS:
+                description = description[: MAX_DESCRIPTION_CHARS - 3].rstrip() + "..."
+            if description:
+                line += f"\n  {description}"
+            if len("\n".join(lines + [line])) > MAX_TOOL_OUTPUT_CHARS:
+                break
+            lines.append(line)
+            shown += 1
+
+        omitted = len(events) - shown
+        if omitted:
+            lines.append(f"{omitted} additional events omitted to protect agent context.")
+        return "\n".join(lines)[:MAX_TOOL_OUTPUT_CHARS]
+
+    def get_task(self, task: str, calendar: str | None = None) -> str:
+        selected, _ = self._find_task(task, calendar)
+        uid = selected.get("UID", "unknown")
+        status = selected.get("STATUS", "NEEDS-ACTION")
+        due = _display_datetime(selected.get("due_datetime"), self.timezone) or "none"
+        description = _single_line(selected.get("DESCRIPTION", "")) or "none"
+        lines = [
+            f"Nextcloud task [{uid}]",
+            f"Title: {selected.get('SUMMARY', 'Untitled task')}",
+            f"List: {selected['calendar']}",
+            f"Status: {status}",
+            f"Due: {due}",
+            f"Description: {description}",
+        ]
+        for label, property_name in (
+            ("Categories", "CATEGORIES"),
+            ("Priority", "PRIORITY"),
+            ("Created", "CREATED"),
+            ("Last modified", "LAST-MODIFIED"),
+        ):
+            if selected.get(property_name):
+                lines.append(f"{label}: {_single_line(selected[property_name])}")
+        return "\n".join(lines)[:MAX_TOOL_OUTPUT_CHARS]
+
+    def complete_task(
+        self,
+        task: str,
+        calendar: str | None = None,
+    ) -> str:
+        selected, _ = self._find_task(task, calendar, writable=True)
+        uid = selected.get("UID")
+        if not uid:
+            raise NextcloudError("Matched Nextcloud task has no UID")
+        if selected.get("COMPLETED") or selected.get("STATUS") == "COMPLETED":
+            return f"Nextcloud task already completed [{uid[:8]}]: {selected.get('SUMMARY', task)}"
+        if not selected.get("etag"):
+            raise NextcloudError("Nextcloud did not return an ETag for the task")
+
+        resource_url = urljoin(f"{self.base_url}/", selected["href"])
+        raw_ical = self._request("GET", resource_url).decode("utf-8")
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        updated_ical = _mark_vtodo_completed(raw_ical, uid, now)
+        try:
+            self._request(
+                "PUT",
+                resource_url,
+                data=updated_ical.encode("utf-8"),
+                headers={
+                    "Content-Type": "text/calendar; charset=utf-8",
+                    "If-Match": selected["etag"],
+                },
+            )
+        except NextcloudError as error:
+            if error.status_code == 412:
+                raise NextcloudError(
+                    "Nextcloud task changed concurrently; list it again and retry"
+                ) from error
+            raise
+
+        return f"Nextcloud task completed [{uid[:8]}]: {selected.get('SUMMARY', task)}"
+
+    def update_task(
+        self,
+        task: str,
+        title: str | None = None,
+        description: str | None = None,
+        due_at: str | None = None,
+        status: str | None = None,
+        calendar: str | None = None,
+    ) -> str:
+        if all(value is None for value in (title, description, due_at, status)):
+            raise NextcloudError("Provide at least one task field to update")
+        selected, _ = self._find_task(task, calendar, writable=True)
+        uid = selected.get("UID")
+        if not uid or not selected.get("etag"):
+            raise NextcloudError("Matched Nextcloud task has no UID or ETag")
+
+        replacements = {}
+        if title is not None:
+            title = _single_line(title).strip()
+            if not title:
+                raise NextcloudError("Task title cannot be empty")
+            replacements["SUMMARY"] = f"SUMMARY:{_escape_ical_text(title)}"
+        if description is not None:
+            replacements["DESCRIPTION"] = (
+                f"DESCRIPTION:{_escape_ical_text(description)}" if description else None
+            )
+        if due_at is not None:
+            replacements["DUE"] = (
+                f"DUE:{_format_utc(_parse_user_datetime(due_at, self.timezone))}"
+                if due_at.strip()
+                else None
+            )
+        normalized_status = None
+        if status is not None:
+            normalized_status = status.strip().upper().replace("_", "-").replace(" ", "-")
+            aliases = {
+                "PENDING": "NEEDS-ACTION",
+                "OPEN": "NEEDS-ACTION",
+                "REOPEN": "NEEDS-ACTION",
+                "DONE": "COMPLETED",
+                "COMPLETE": "COMPLETED",
+            }
+            normalized_status = aliases.get(normalized_status, normalized_status)
+            if normalized_status not in {
+                "NEEDS-ACTION",
+                "IN-PROCESS",
+                "COMPLETED",
+                "CANCELLED",
+            }:
+                raise NextcloudError(
+                    "status must be needs-action, in-process, completed, or cancelled"
+                )
+            replacements.update(
+                {
+                    "STATUS": f"STATUS:{normalized_status}",
+                    "COMPLETED": None,
+                    "PERCENT-COMPLETE": (
+                        "PERCENT-COMPLETE:50"
+                        if normalized_status == "IN-PROCESS"
+                        else "PERCENT-COMPLETE:0"
+                    ),
+                }
+            )
+
+        resource_url = urljoin(f"{self.base_url}/", selected["href"])
+        raw_ical = self._request("GET", resource_url).decode("utf-8")
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        if normalized_status == "COMPLETED":
+            replacements.update(
+                {
+                    "STATUS": "STATUS:COMPLETED",
+                    "PERCENT-COMPLETE": "PERCENT-COMPLETE:100",
+                    "COMPLETED": f"COMPLETED:{_format_utc(now)}",
+                }
+            )
+        updated_ical = _rewrite_vtodo_properties(raw_ical, uid, replacements, now)
+        self._conditional_task_request(
+            "PUT",
+            resource_url,
+            selected["etag"],
+            data=updated_ical.encode("utf-8"),
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        return f"Nextcloud task updated [{uid[:8]}]: {title or selected.get('SUMMARY', task)}"
+
+    def delete_task(self, task: str, calendar: str | None = None) -> str:
+        selected, _ = self._find_task(task, calendar, writable=True)
+        uid = selected.get("UID")
+        if not uid or not selected.get("etag"):
+            raise NextcloudError("Matched Nextcloud task has no UID or ETag")
+        resource_url = urljoin(f"{self.base_url}/", selected["href"])
+        self._conditional_task_request("DELETE", resource_url, selected["etag"])
+        return f"Nextcloud task deleted [{uid[:8]}]: {selected.get('SUMMARY', task)}"
+
+    def move_task(
+        self,
+        task: str,
+        destination_calendar: str,
+        calendar: str | None = None,
+    ) -> str:
+        selected, source_calendar = self._find_task(task, calendar, writable=True)
+        calendars = self.discover_calendars()
+        destination = self._task_calendars(
+            calendars, destination_calendar, writable=True
+        )[0]
+        uid = selected.get("UID")
+        if not uid or not selected.get("etag"):
+            raise NextcloudError("Matched Nextcloud task has no UID or ETag")
+        if source_calendar.url == destination.url:
+            return f"Nextcloud task already in list {destination.name} [{uid[:8]}]"
+
+        resource_url = urljoin(f"{self.base_url}/", selected["href"])
+        resource_name = urlparse(resource_url).path.rsplit("/", 1)[-1]
+        destination_url = urljoin(destination.url.rstrip("/") + "/", resource_name)
+        self._conditional_task_request(
+            "MOVE",
+            resource_url,
+            selected["etag"],
+            headers={"Destination": destination_url, "Overwrite": "F"},
+        )
+        return (
+            f"Nextcloud task moved [{uid[:8]}]: {selected.get('SUMMARY', task)} "
+            f"from {source_calendar.name} to {destination.name}"
+        )
+
+    def _conditional_task_request(
+        self,
+        method: str,
+        url: str,
+        etag: str,
+        **kwargs,
+    ) -> bytes:
+        headers = dict(kwargs.pop("headers", {}))
+        headers["If-Match"] = etag
+        try:
+            return self._request(method, url, headers=headers, **kwargs)
+        except NextcloudError as error:
+            if error.status_code == 412:
+                raise NextcloudError(
+                    "Nextcloud task changed concurrently; list it again and retry"
+                ) from error
+            raise
 
     def _resource_exists(self, url: str) -> bool:
         try:
@@ -364,6 +803,7 @@ class NextcloudTasksClient:
         due_at: str,
         description: str | None = None,
         reminder_minutes_before: int = 0,
+        calendar: str | None = None,
     ) -> str:
         title = _single_line(title).strip()
         if not title:
@@ -384,7 +824,7 @@ class NextcloudTasksClient:
 
         calendars = self.discover_calendars()
         task_calendar = self._select_calendar(
-            calendars, "VTODO", self.task_calendar
+            calendars, "VTODO", calendar or self.task_calendar
         )
         if (
             not self.reminder_calendar
@@ -425,7 +865,14 @@ class NextcloudTasksClient:
         )
         now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
         trigger = _alarm_trigger(reminder_minutes_before)
-        task_ics = _build_task_ics(task_uid, title, description or "", due, now)
+        task_ics = _build_task_ics(
+            task_uid,
+            title,
+            description or "",
+            due,
+            now,
+            trigger,
+        )
         event_ics = _build_reminder_event_ics(
             event_uid,
             task_uid,
@@ -457,6 +904,84 @@ class NextcloudTasksClient:
             f"Due: {due_display}. Reminder: {reminder_display}."
         )
 
+    def set_task_reminder(
+        self,
+        task: str,
+        reminder_minutes_before: int,
+        calendar: str | None = None,
+    ) -> str:
+        try:
+            reminder_minutes_before = int(reminder_minutes_before)
+        except (TypeError, ValueError) as error:
+            raise NextcloudError("reminder_minutes_before must be an integer") from error
+        if not 0 <= reminder_minutes_before <= 525600:
+            raise NextcloudError("reminder_minutes_before must be between 0 and 525600")
+
+        selected, task_calendar = self._find_task(task, calendar, writable=True)
+        uid = selected.get("UID")
+        due = selected.get("due_datetime")
+        etag = selected.get("etag")
+        if not uid or not etag:
+            raise NextcloudError("Matched Nextcloud task has no UID or ETag")
+        if due is None:
+            raise NextcloudError("A due date is required before adding a reminder")
+        reminder_at = due - datetime.timedelta(minutes=reminder_minutes_before)
+        if reminder_at <= datetime.datetime.now(datetime.UTC):
+            raise NextcloudError("Reminder time must be in the future")
+
+        title = selected.get("SUMMARY") or "Untitled task"
+        description = selected.get("DESCRIPTION") or ""
+        now = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        trigger = _alarm_trigger(reminder_minutes_before)
+        resource_url = urljoin(f"{self.base_url}/", selected["href"])
+        raw_ical = self._request("GET", resource_url).decode("utf-8")
+        updated_task = _set_vtodo_alarm(raw_ical, uid, title, trigger, now)
+
+        calendars = self.discover_calendars()
+        if (
+            not self.reminder_calendar
+            and (not task_calendar.components or "VEVENT" in task_calendar.components)
+        ):
+            reminder_calendar = task_calendar
+        else:
+            reminder_calendar = self._select_calendar(
+                calendars, "VEVENT", self.reminder_calendar
+            )
+        reminder_id = _reminder_id_for_task(self.username, uid)
+        event_uid = f"reminder-{reminder_id}@servitor"
+        event_url = urljoin(
+            reminder_calendar.url.rstrip("/") + "/",
+            quote(f"reminder-{reminder_id}.ics"),
+        )
+        event_ics = _build_reminder_event_ics(
+            event_uid,
+            uid,
+            title,
+            description,
+            due,
+            now,
+            trigger,
+            reminder_calendar.timezone,
+        )
+
+        self._request(
+            "PUT",
+            event_url,
+            data=event_ics.encode("utf-8"),
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        self._conditional_task_request(
+            "PUT",
+            resource_url,
+            etag,
+            data=updated_task.encode("utf-8"),
+            headers={"Content-Type": "text/calendar; charset=utf-8"},
+        )
+        return (
+            f"Nextcloud task reminder set [{uid[:8]}]: {title}. "
+            f"Reminder: {_display_datetime(reminder_at, self.timezone)}."
+        )
+
 
 def _unfold_ical(text: str) -> list[str]:
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -478,17 +1003,17 @@ def _default_ca_bundle() -> bool | str:
     )
 
 
-def _parse_vtodos(text: str) -> list[dict]:
-    tasks = []
-    task = None
+def _parse_ical_components(text: str, component_name: str) -> list[dict]:
+    components = []
+    component = None
     nested_depth = 0
     for line in _unfold_ical(text):
         upper = line.upper()
-        if upper == "BEGIN:VTODO":
-            task = {}
+        if upper == f"BEGIN:{component_name}":
+            component = {}
             nested_depth = 0
             continue
-        if task is None:
+        if component is None:
             continue
         if upper.startswith("BEGIN:"):
             nested_depth += 1
@@ -496,9 +1021,9 @@ def _parse_vtodos(text: str) -> list[dict]:
         if upper.startswith("END:") and nested_depth:
             nested_depth -= 1
             continue
-        if upper == "END:VTODO":
-            tasks.append(task)
-            task = None
+        if upper == f"END:{component_name}":
+            components.append(component)
+            component = None
             continue
         if nested_depth or ":" not in line:
             continue
@@ -506,10 +1031,215 @@ def _parse_vtodos(text: str) -> list[dict]:
         raw_name, value = line.split(":", 1)
         name, _, parameters = raw_name.partition(";")
         name = name.upper()
-        task[name] = _unescape_ical_text(value)
+        component[name] = _unescape_ical_text(value)
         if parameters:
-            task[f"{name}_parameters"] = parameters
-    return tasks
+            component[f"{name}_parameters"] = parameters
+    return components
+
+
+def _parse_vtodos(text: str) -> list[dict]:
+    return _parse_ical_components(text, "VTODO")
+
+
+def _match_tasks(tasks: list[dict], identifier: str) -> list[dict]:
+    wanted = _single_line(identifier).strip().casefold()
+    exact = [
+        item
+        for item in tasks
+        if wanted
+        in {
+            (item.get("SUMMARY") or "").strip().casefold(),
+            (item.get("UID") or "").casefold(),
+            (item.get("UID") or "")[:8].casefold(),
+        }
+    ]
+    if exact:
+        return exact
+    uid_matches = []
+    for item in tasks:
+        uid = item.get("UID") or ""
+        if uid and (uid.casefold() in wanted or uid[:8].casefold() in wanted):
+            uid_matches.append(item)
+    if uid_matches:
+        return uid_matches
+    return [
+        item
+        for item in tasks
+        if (item.get("SUMMARY") or "").strip()
+        and (item.get("SUMMARY") or "").strip().casefold() in wanted
+    ]
+
+
+def _mark_vtodo_completed(
+    text: str,
+    uid: str,
+    completed_at: datetime.datetime,
+) -> str:
+    timestamp = _format_utc(completed_at)
+    return _rewrite_vtodo_properties(
+        text,
+        uid,
+        {
+            "STATUS": "STATUS:COMPLETED",
+            "PERCENT-COMPLETE": "PERCENT-COMPLETE:100",
+            "COMPLETED": f"COMPLETED:{timestamp}",
+        },
+        completed_at,
+    )
+
+
+def _rewrite_vtodo_properties(
+    text: str,
+    uid: str,
+    replacements: dict[str, str | None],
+    modified_at: datetime.datetime,
+) -> str:
+    lines = _unfold_ical(text)
+    output = []
+    index = 0
+    found = False
+    while index < len(lines):
+        if lines[index].upper() != "BEGIN:VTODO":
+            if lines[index]:
+                output.append(lines[index])
+            index += 1
+            continue
+
+        start = index
+        nested_depth = 0
+        index += 1
+        while index < len(lines):
+            upper = lines[index].upper()
+            if upper.startswith("BEGIN:"):
+                nested_depth += 1
+            elif upper.startswith("END:") and nested_depth:
+                nested_depth -= 1
+            elif upper == "END:VTODO":
+                break
+            index += 1
+        if index >= len(lines):
+            raise NextcloudError("Nextcloud task contains an incomplete VTODO")
+
+        block = lines[start : index + 1]
+        parsed = _parse_vtodos("\r\n".join(block))
+        if not parsed or parsed[0].get("UID") != uid:
+            output.extend(block)
+            index += 1
+            continue
+
+        sequence = 0
+        try:
+            sequence = int(parsed[0].get("SEQUENCE", "0"))
+        except ValueError:
+            pass
+        replacement_names = {name.upper() for name in replacements}
+        replacement_names.update({"LAST-MODIFIED", "SEQUENCE"})
+        replacement_lines = [
+            line for line in replacements.values() if line is not None
+        ]
+        replacement_lines.extend(
+            [
+                f"LAST-MODIFIED:{_format_utc(modified_at)}",
+                f"SEQUENCE:{sequence + 1}",
+            ]
+        )
+
+        output.append(block[0])
+        nested_depth = 0
+        inserted = False
+        for line in block[1:-1]:
+            upper = line.upper()
+            if not inserted and nested_depth == 0 and upper.startswith("BEGIN:"):
+                output.extend(replacement_lines)
+                inserted = True
+            property_name = line.split(":", 1)[0].split(";", 1)[0].upper()
+            if nested_depth != 0 or property_name not in replacement_names:
+                output.append(line)
+            if upper.startswith("BEGIN:"):
+                nested_depth += 1
+            elif upper.startswith("END:") and nested_depth:
+                nested_depth -= 1
+        if not inserted:
+            output.extend(replacement_lines)
+        output.append("END:VTODO")
+        found = True
+        index += 1
+
+    if not found:
+        raise NextcloudError(f"Nextcloud resource does not contain task UID: {uid}")
+    return _serialize_ical(output)
+
+
+def _set_vtodo_alarm(
+    text: str,
+    uid: str,
+    title: str,
+    trigger: str,
+    modified_at: datetime.datetime,
+) -> str:
+    rewritten = _rewrite_vtodo_properties(text, uid, {}, modified_at)
+    lines = _unfold_ical(rewritten)
+    output = []
+    index = 0
+    found = False
+    while index < len(lines):
+        if lines[index].upper() != "BEGIN:VTODO":
+            if lines[index]:
+                output.append(lines[index])
+            index += 1
+            continue
+
+        start = index
+        index += 1
+        nested_depth = 0
+        while index < len(lines):
+            upper = lines[index].upper()
+            if upper.startswith("BEGIN:"):
+                nested_depth += 1
+            elif upper.startswith("END:") and nested_depth:
+                nested_depth -= 1
+            elif upper == "END:VTODO":
+                break
+            index += 1
+        if index >= len(lines):
+            raise NextcloudError("Nextcloud task contains an incomplete VTODO")
+
+        block = lines[start : index + 1]
+        parsed = _parse_vtodos("\r\n".join(block))
+        if not parsed or parsed[0].get("UID") != uid:
+            output.extend(block)
+            index += 1
+            continue
+
+        output.append("BEGIN:VTODO")
+        block_index = 1
+        while block_index < len(block) - 1:
+            if block[block_index].upper() != "BEGIN:VALARM":
+                output.append(block[block_index])
+                block_index += 1
+                continue
+            alarm_end = block_index + 1
+            while (
+                alarm_end < len(block) - 1
+                and block[alarm_end].upper() != "END:VALARM"
+            ):
+                alarm_end += 1
+            if alarm_end >= len(block) - 1:
+                raise NextcloudError("Nextcloud task contains an incomplete VALARM")
+            alarm_block = block[block_index : alarm_end + 1]
+            if not any(
+                line.upper() == "X-SERVITOR-REMINDER:TRUE" for line in alarm_block
+            ):
+                output.extend(alarm_block)
+            block_index = alarm_end + 1
+        output.extend(_task_alarm_lines(title, trigger))
+        output.append("END:VTODO")
+        found = True
+        index += 1
+
+    if not found:
+        raise NextcloudError(f"Nextcloud resource does not contain task UID: {uid}")
+    return _serialize_ical(output)
 
 
 def _single_line(value: str) -> str:
@@ -602,6 +1332,27 @@ def _alarm_trigger(minutes_before: int) -> str:
     return f"-PT{minutes_before}M"
 
 
+def _reminder_id_for_task(username: str, task_uid: str) -> str:
+    if task_uid.endswith("@servitor"):
+        candidate = task_uid.removesuffix("@servitor")
+        try:
+            return str(uuid.UUID(candidate))
+        except ValueError:
+            pass
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{username}|{task_uid}"))
+
+
+def _task_alarm_lines(title: str, trigger: str) -> list[str]:
+    return [
+        "BEGIN:VALARM",
+        "ACTION:DISPLAY",
+        f"DESCRIPTION:{_escape_ical_text('Task reminder: ' + title)}",
+        f"TRIGGER;RELATED=END:{trigger}",
+        "X-SERVITOR-REMINDER:TRUE",
+        "END:VALARM",
+    ]
+
+
 def _format_utc(value: datetime.datetime) -> str:
     return value.astimezone(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
 
@@ -646,6 +1397,7 @@ def _build_task_ics(
     description: str,
     due: datetime.datetime,
     now: datetime.datetime,
+    trigger: str,
 ) -> str:
     timestamp = _format_utc(now)
     lines = [
@@ -662,14 +1414,9 @@ def _build_task_ics(
     ]
     if description:
         lines.append(f"DESCRIPTION:{_escape_ical_text(description)}")
-    lines.extend(
-        [
-            f"DUE:{_format_utc(due)}",
-            "STATUS:NEEDS-ACTION",
-            "END:VTODO",
-            "END:VCALENDAR",
-        ]
-    )
+    lines.extend([f"DUE:{_format_utc(due)}", "STATUS:NEEDS-ACTION"])
+    lines.extend(_task_alarm_lines(title, trigger))
+    lines.extend(["END:VTODO", "END:VCALENDAR"])
     return _serialize_ical(lines)
 
 
