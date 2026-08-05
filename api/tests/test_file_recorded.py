@@ -156,5 +156,49 @@ class TranscribeAudioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "esta frase e valida e longa o suficiente")
 
 
+class AmplifyWavTests(unittest.TestCase):
+    @staticmethod
+    def _sine_wav(amplitude: float, frames: int = 8000) -> bytes:
+        import math
+
+        import numpy as np
+
+        samples = (np.sin(np.linspace(0, 4 * np.pi, frames)) * amplitude * 32767).astype(
+            np.int16
+        )
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(16000)
+            w.writeframes(samples.tobytes())
+        return buf.getvalue()
+
+    @staticmethod
+    def _peak(wav_bytes: bytes) -> float:
+        import numpy as np
+
+        with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+            raw = w.readframes(w.getnframes())
+        return float(np.max(np.abs(np.frombuffer(raw, dtype=np.int16))) / 32767.0)
+
+    def test_quiet_wav_gets_full_gain(self):
+        from server.Server import ServitorServer
+
+        server = object.__new__(ServitorServer)
+        quiet = self._sine_wav(0.1)
+        amplified = server._amplify_wav(quiet)
+        self.assertGreater(self._peak(amplified), 0.7)
+        self.assertLessEqual(self._peak(amplified), 1.0)
+
+    def test_loud_wav_never_clips(self):
+        from server.Server import ServitorServer
+
+        server = object.__new__(ServitorServer)
+        loud = self._sine_wav(0.9)
+        amplified = server._amplify_wav(loud)
+        self.assertLessEqual(self._peak(amplified), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()

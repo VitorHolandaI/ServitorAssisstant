@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import datetime
 import requests
+import numpy as np
 from zoneinfo import ZoneInfo
 from io import BytesIO
 from pathlib import Path
@@ -240,7 +241,23 @@ class ServitorServer:
         )
         with wave.open(bytes_audio, "wb") as wav_file:
             self.voice.synthesize_wav(text, wav_file, syn_config=syn_config_1)
-        return bytes_audio.getvalue()
+        return self._amplify_wav(bytes_audio.getvalue())
+
+    def _amplify_wav(self, wav_bytes: bytes, max_gain: float = 8.0) -> bytes:
+        with wave.open(BytesIO(wav_bytes), "rb") as w:
+            params = w.getparams()
+            samples = w.readframes(w.getnframes())
+        data = np.frombuffer(samples, dtype=np.int16).astype(np.float32) / 32768.0
+        peak = float(np.max(np.abs(data)))
+        if peak > 1e-9:
+            gain = min(max_gain, 0.95 / peak)
+            data = (data * gain).clip(-1.0, 1.0)
+        data = (data * 32767.0).astype(np.int16)
+        out = BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setparams(params)
+            w.writeframes(data.tobytes())
+        return out.getvalue()
 
     async def transcribe_audio(self, audio_file) -> str | None:
         logger.info("[Server] transcribe_audio")
