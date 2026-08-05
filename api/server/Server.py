@@ -102,7 +102,14 @@ class ServitorServer:
             "When the user asks for a summary of coding activity this week, use summarize_weekly_dev_activity. "
             "After calling summarize_weekly_dev_activity, respond with a concise human summary of the activity. "
             "Do NOT reinterpret raw event names like mirror_sync_push or mirror_sync_create as user support questions. "
-            "Treat those values only as activity labels from the source system."
+            "Treat those values only as activity labels from the source system. "
+            "FORMATTING: NEVER use markdown, asterisks, bold, italics, headings, bullet markers "
+            "(*, **, #, -, >), or any formatting symbols in responses. Plain text only, "
+            "with numbers and line breaks for structure. "
+            "SPOKEN TIMES: When reporting times (task reminders, events, schedules), "
+            "always write them out in full Portuguese words, e.g. 'dezoito horas' for 18:00, "
+            "'vinte horas e trinta minutos' for 20:30, 'meio-dia' for 12:00. "
+            "Never use numeric clock formats like '18:00' or '20:30'."
         )
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
@@ -231,6 +238,7 @@ class ServitorServer:
 
     def generate_audio(self, text: str) -> bytes:
         logger.debug(f"[Server] generate_audio: {len(text)} chars")
+        text = self._strip_markdown(text)
         bytes_audio = BytesIO()
         syn_config_1 = SynthesisConfig(
             volume=0.1,
@@ -299,11 +307,23 @@ class ServitorServer:
             return None
         return talk
 
+    def _strip_markdown(self, text: str) -> str:
+        text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"\*([^*\n]+)\*", r"\1", text)
+        text = re.sub(r"^[ \t]*(?:[-*+#>])[ \t]+", "", text, flags=re.MULTILINE)
+        text = text.replace("`", "")
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
     async def process_audio_text(self, audio_file) -> str | None:
         talk = await self.transcribe_audio(audio_file)
         if talk is None:
             return None
-        return await self.process_ollama(talk)
+        response = await self.process_ollama(talk)
+        if response is None:
+            return None
+        return self._strip_markdown(response)
 
     async def process_audio(self, audio_file):
         talk = await self.process_audio_text(audio_file)

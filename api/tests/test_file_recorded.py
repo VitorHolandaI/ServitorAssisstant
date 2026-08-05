@@ -200,5 +200,28 @@ class AmplifyWavTests(unittest.TestCase):
         self.assertLessEqual(self._peak(amplified), 1.0)
 
 
+class StripMarkdownTests(unittest.TestCase):
+    def setUp(self):
+        from server.Server import ServitorServer
+
+        self.server = object.__new__(ServitorServer)
+
+    def test_removes_bold_and_bullets(self):
+        text = "**Existem duas tarefas:**\n* imprimir marcadores\n* anotar objettios\n\n- fim"
+        result = self.server._strip_markdown(text)
+        self.assertNotIn("*", result)
+        self.assertNotIn("- fim", result)
+        self.assertIn("imprimir marcadores", result)
+        self.assertIn("Existem duas tarefas", result)
+
+    def test_removes_hashtags_backticks_and_blocks(self):
+        text = "# Título\n```\ncode\n```\n`inline`\n> quote"
+        result = self.server._strip_markdown(text)
+        self.assertNotIn("#", result)
+        self.assertNotIn("`", result)
+        self.assertNotIn(">", result)
+        self.assertNotIn("code", result)
+
+
 if __name__ == "__main__":
     unittest.main()
