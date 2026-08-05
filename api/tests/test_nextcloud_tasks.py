@@ -1,5 +1,6 @@
 import html
 import datetime
+import json
 import unittest
 from typing import cast
 from unittest.mock import patch
@@ -10,9 +11,11 @@ from api.mcp_module.stremable_http.nextcloud_tasks import (
     MAX_TOOL_OUTPUT_CHARS,
     NextcloudError,
     NextcloudTasksClient,
+    _alarm_minutes_by_uid,
     _mark_vtodo_completed,
     _parse_vtodos,
     _set_vtodo_alarm,
+    _trigger_minutes,
 )
 
 
@@ -111,6 +114,27 @@ def task_report(tasks):
             "END:VTODO\r\n"
             "END:VCALENDAR\r\n"
         )
+        responses.append(
+            "<d:response>"
+            f"<d:href>/tasks/{index}.ics</d:href>"
+            "<d:propstat><d:prop>"
+            f"<d:getetag>&quot;etag-{index}&quot;</d:getetag>"
+            f"<c:calendar-data>{html.escape(ics)}</c:calendar-data>"
+            "</d:prop></d:propstat>"
+            "</d:response>"
+        )
+    return (
+        '<?xml version="1.0"?>'
+        '<d:multistatus xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
+        + "".join(responses)
+        + "</d:multistatus>"
+    ).encode()
+
+
+def todo_report(vtodo_bodies):
+    responses = []
+    for index, body in enumerate(vtodo_bodies):
+        ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + body + "END:VCALENDAR\r\n"
         responses.append(
             "<d:response>"
             f"<d:href>/tasks/{index}.ics</d:href>"
@@ -717,6 +741,129 @@ END:VCALENDAR\r
 
         with self.assertRaisesRegex(NextcloudError, "due_at must use ISO format"):
             client.create_task("Test", "2099-01-01")
+
+    def test_snapshot_agenda_returns_structured_json(self):
+        client, _ = self.make_client(
+            [
+                FakeResponse(
+                    calendars_response(
+                        [
+                            {"name": "Personal", "components": ("VEVENT",), "slug": "personal"},
+                            {"name": "Tasks", "components": ("VTODO",), "slug": "tasks"},
+                        ]
+                    ),
+                    207,
+                ),
+                FakeResponse(
+                    event_report(
+                        [
+                            {
+                                "uid": "ev-1",
+                                "title": "Meeting",
+                                "start": "20260805T140000Z",
+                                "end": "20260805T150000Z",
+                            }
+                        ]
+                    ),
+                    207,
+                ),
+                FakeResponse(
+                    task_report(
+                        [{"uid": "task-1", "title": "Review", "due": "20260806T170000Z"}]
+                    ),
+                    207,
+                ),
+            ]
+        )
+
+        snapshot = client.snapshot_agenda(start_date="2026-08-04", days=7)
+
+        json.dumps(snapshot)  # must be JSON-serializable
+        self.assertEqual(snapshot["schema_version"], 1)
+        self.assertTrue(snapshot["complete"])
+        self.assertEqual(snapshot["timezone"], "America/Recife")
+        self.assertEqual(snapshot["range"]["start_local"], "2026-08-04T00:00:00-03:00")
+        self.assertEqual(
+            snapshot["range"]["end_local_exclusive"], "2026-08-11T00:00:00-03:00"
+        )
+        self.assertEqual(
+            snapshot["counts"],
+            {"events": 1, "tasks": 1, "overdue_tasks": 0, "undated_tasks": 0},
+        )
+        event = snapshot["events"][0]
+        self.assertEqual(event["title"], "Meeting")
+        self.assertEqual(event["start"], "2026-08-05T14:00:00Z")
+        self.assertEqual(event["key"], "Personal/ev-1/2026-08-05T14:00:00Z")
+        task = snapshot["tasks"][0]
+        self.assertEqual(task["key"], "Tasks/task-1")
+        self.assertEqual(task["list"], "Tasks")
+        self.assertEqual(task["due"], "2026-08-06T17:00:00Z")
+        self.assertFalse(task["overdue"])
+
+    def test_snapshot_agenda_groups_overdue_and_undated(self):
+        vtodos = [
+            "BEGIN:VTODO\r\nUID:overdue-1\r\nSUMMARY:Late\r\n"
+            "DUE:20260101T120000Z\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+            "BEGIN:VTODO\r\nUID:inrange-1\r\nSUMMARY:Soon\r\n"
+            "DUE:20260806T170000Z\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+            "BEGIN:VTODO\r\nUID:undated-1\r\nSUMMARY:Someday\r\n"
+            "STATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+        ]
+
+        client, _ = self.make_client(
+            [
+                FakeResponse(calendar_response(components=("VTODO",)), 207),
+                FakeResponse(todo_report(vtodos), 207),
+            ]
+        )
+        default_snapshot = client.snapshot_agenda(start_date="2026-08-04")
+
+        self.assertEqual(default_snapshot["counts"]["tasks"], 2)  # overdue + in-range
+        self.assertEqual(default_snapshot["counts"]["overdue_tasks"], 1)
+        self.assertEqual(default_snapshot["counts"]["undated_tasks"], 0)
+        overdue = next(t for t in default_snapshot["tasks"] if t["uid"] == "overdue-1")
+        self.assertTrue(overdue["overdue"])
+
+        client, _ = self.make_client(
+            [
+                FakeResponse(calendar_response(components=("VTODO",)), 207),
+                FakeResponse(todo_report(vtodos), 207),
+            ]
+        )
+        widened = client.snapshot_agenda(
+            start_date="2026-08-04",
+            include_overdue_tasks=False,
+            include_undated_tasks=True,
+        )
+
+        uids = {task["uid"] for task in widened["tasks"]}
+        self.assertEqual(uids, {"inrange-1", "undated-1"})
+        self.assertEqual(widened["counts"]["undated_tasks"], 1)
+
+    def test_snapshot_agenda_rejects_out_of_range_days(self):
+        client, _ = self.make_client([])
+
+        with self.assertRaisesRegex(NextcloudError, "days must be between 1 and 31"):
+            client.snapshot_agenda(days=40)
+
+    def test_trigger_minutes_parses_relative_durations(self):
+        self.assertEqual(_trigger_minutes("-PT10M"), 10)
+        self.assertEqual(_trigger_minutes("-PT1H"), 60)
+        self.assertEqual(_trigger_minutes("-P1DT2H"), 26 * 60)
+        self.assertEqual(_trigger_minutes("PT0M"), 0)
+        self.assertEqual(_trigger_minutes("PT30M"), 0)  # after start is not a lead
+
+    def test_alarm_minutes_by_uid_reads_first_valarm(self):
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "BEGIN:VTODO\r\nUID:t1\r\nSUMMARY:x\r\n"
+            "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER;RELATED=START:-PT15M\r\n"
+            "END:VALARM\r\nEND:VTODO\r\n"
+            "BEGIN:VTODO\r\nUID:t2\r\nSUMMARY:y\r\nEND:VTODO\r\n"
+            "END:VCALENDAR\r\n"
+        )
+
+        self.assertEqual(_alarm_minutes_by_uid(ics, "VTODO"), {"t1": 15, "t2": 0})
 
 
 if __name__ == "__main__":

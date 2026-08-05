@@ -1,5 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 import asyncio
+import json
 import openmeteo_requests
 import requests_cache
 from retry_requests import retry
@@ -338,6 +339,53 @@ async def list_nextcloud_tasks(
         )
     except NextcloudError as error:
         return f"Nextcloud task error: {error}"
+    finally:
+        if client is not None:
+            client.close()
+
+
+@mcp.tool()
+async def sync_nextcloud_agenda(
+    start_date: str | None = None,
+    days: int = 7,
+    include_overdue_tasks: bool = True,
+    include_undated_tasks: bool = False,
+    task_lists: str | None = None,
+    event_calendars: str | None = None,
+) -> str:
+    """Return a structured JSON snapshot of Nextcloud events and tasks.
+
+    Built for an embedded appliance, not for the LLM: the return value is a JSON
+    document, not formatted text. It covers the half-open local range
+    [start_date 00:00, start_date + days 00:00). start_date defaults to today in
+    NC_TIMEZONE; days defaults to 7 (bounded 1..31). Events overlapping the range
+    are included and recurring events are expanded inside it; linked reminder
+    events are omitted because the task carries the reminder. Tasks are grouped
+    into due-in-range, overdue (when include_overdue_tasks), and undated (when
+    include_undated_tasks). When every requested collection is read, "complete"
+    is true and the appliance may delete local records that vanished; on partial
+    failure "complete" is false and "errors" lists the failed collections.
+    Example: sync_nextcloud_agenda(days=7).
+    """
+    print(f"[MCP] sync_nextcloud_agenda: start_date={start_date}, days={days}")
+    client = None
+    try:
+        client = NextcloudTasksClient.from_env()
+        snapshot = await asyncio.to_thread(
+            client.snapshot_agenda,
+            start_date,
+            days,
+            include_overdue_tasks,
+            include_undated_tasks,
+            task_lists,
+            event_calendars,
+        )
+        return json.dumps(snapshot, ensure_ascii=False)
+    except NextcloudError as error:
+        return json.dumps(
+            {"schema_version": 1, "complete": False, "errors": [{"error": str(error)}]},
+            ensure_ascii=False,
+        )
     finally:
         if client is not None:
             client.close()

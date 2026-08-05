@@ -346,6 +346,7 @@ class NextcloudTasksClient:
             calendar_data = response.findtext(f".//{{{CALDAV}}}calendar-data")
             if not calendar_data:
                 continue
+            alarms = _alarm_minutes_by_uid(calendar_data, "VTODO")
             for task in _parse_vtodos(calendar_data):
                 if task.get("STATUS") == "CANCELLED":
                     continue
@@ -356,6 +357,7 @@ class NextcloudTasksClient:
                 task["due_datetime"] = _parse_ical_datetime(
                     task.get("DUE"), task.get("DUE_parameters"), self.timezone
                 )
+                task["reminder_minutes_before"] = alarms.get(task.get("UID"), 0)
                 tasks.append(task)
         return tasks
 
@@ -401,11 +403,13 @@ class NextcloudTasksClient:
             calendar_data = response.findtext(f".//{{{CALDAV}}}calendar-data")
             if not calendar_data:
                 continue
+            alarms = _alarm_minutes_by_uid(calendar_data, "VEVENT")
             for event in _parse_ical_components(calendar_data, "VEVENT"):
                 if event.get("STATUS") == "CANCELLED":
                     continue
                 event["calendar"] = calendar.name
                 event["href"] = href
+                event["reminder_minutes_before"] = alarms.get(event.get("UID"), 0)
                 event["start_datetime"] = _parse_ical_datetime(
                     event.get("DTSTART"),
                     event.get("DTSTART_parameters"),
@@ -981,6 +985,313 @@ class NextcloudTasksClient:
             f"Nextcloud task reminder set [{uid[:8]}]: {title}. "
             f"Reminder: {_display_datetime(reminder_at, self.timezone)}."
         )
+
+    def snapshot_agenda(
+        self,
+        start_date: str | None = None,
+        days: int = 7,
+        include_overdue_tasks: bool = True,
+        include_undated_tasks: bool = False,
+        task_lists: str | None = None,
+        event_calendars: str | None = None,
+    ) -> dict:
+        """Structured 7-day snapshot of events + tasks for an appliance.
+
+        Covers the half-open local range [start_date 00:00, +days 00:00).
+        Returns a JSON-serializable dict; see docs/mcp/nextcloud-appliance-sync.md.
+        Example: client.snapshot_agenda(days=7) for today's local week.
+        """
+        days = _validate_snapshot_days(days)
+        start_local, end_local = self._snapshot_range(start_date, days)
+        start_utc = start_local.astimezone(datetime.UTC)
+        end_utc = end_local.astimezone(datetime.UTC)
+        calendars = self.discover_calendars()
+        errors: list[dict] = []
+        events = self._collect_snapshot_events(
+            calendars, start_utc, end_utc, event_calendars, errors
+        )
+        tasks = self._collect_snapshot_tasks(
+            calendars, start_utc, end_utc,
+            include_overdue_tasks, include_undated_tasks, task_lists, errors,
+        )
+        generated_at = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
+        return self._build_snapshot(
+            generated_at, start_local, end_local, days, events, tasks, errors
+        )
+
+    def _snapshot_range(
+        self, start_date: str | None, days: int
+    ) -> tuple[datetime.datetime, datetime.datetime]:
+        if start_date is None:
+            query_date = datetime.datetime.now(self.timezone).date()
+        else:
+            try:
+                query_date = datetime.datetime.strptime(start_date, "%Y-%m-%d").date()
+            except (TypeError, ValueError) as error:
+                raise NextcloudError(
+                    f"start_date must use YYYY-MM-DD format, got {start_date!r}"
+                ) from error
+        start_local = datetime.datetime.combine(
+            query_date, datetime.time.min, tzinfo=self.timezone
+        )
+        return start_local, start_local + datetime.timedelta(days=days)
+
+    def _collect_snapshot_events(
+        self,
+        calendars: list[Calendar],
+        start_utc: datetime.datetime,
+        end_utc: datetime.datetime,
+        selector: str | None,
+        errors: list[dict],
+    ) -> list[dict]:
+        wanted = _selector_set(selector)
+        unique: dict[str, dict] = {}
+        for calendar in calendars:
+            if calendar.components and "VEVENT" not in calendar.components:
+                continue
+            if wanted and not _calendar_matches(calendar, wanted):
+                continue
+            try:
+                found = self._calendar_event_query(calendar, start_utc, end_utc)
+            except NextcloudError as error:
+                errors.append({"calendar": calendar.name, "error": str(error)})
+                continue
+            for event in found:
+                if event.get("X-SERVITOR-TASK-UID"):
+                    continue  # linked reminder event; the task itself carries it
+                serialized = _serialize_snapshot_event(event)
+                unique[serialized["key"]] = serialized
+        return sorted(
+            unique.values(), key=lambda item: (item["start"], item["title"].casefold())
+        )
+
+    def _collect_snapshot_tasks(
+        self,
+        calendars: list[Calendar],
+        start_utc: datetime.datetime,
+        end_utc: datetime.datetime,
+        include_overdue: bool,
+        include_undated: bool,
+        selector: str | None,
+        errors: list[dict],
+    ) -> list[dict]:
+        try:
+            task_calendars = self._task_calendars(calendars, selector)
+        except NextcloudError as error:
+            errors.append({"calendar": selector or "tasks", "error": str(error)})
+            return []
+        tasks: list[dict] = []
+        for calendar in task_calendars:
+            try:
+                found = self._calendar_query(calendar, show_completed=False)
+            except NextcloudError as error:
+                errors.append({"calendar": calendar.name, "error": str(error)})
+                continue
+            for task in found:
+                serialized = _classify_snapshot_task(
+                    task, start_utc, end_utc, include_overdue, include_undated
+                )
+                if serialized is not None:
+                    tasks.append(serialized)
+        tasks.sort(
+            key=lambda item: (item["due"] is None, item["due"] or "", item["title"].casefold())
+        )
+        return tasks
+
+    def _build_snapshot(
+        self,
+        generated_at: datetime.datetime,
+        start_local: datetime.datetime,
+        end_local: datetime.datetime,
+        days: int,
+        events: list[dict],
+        tasks: list[dict],
+        errors: list[dict],
+    ) -> dict:
+        return {
+            "schema_version": 1,
+            "snapshot_id": f"{_iso_utc(generated_at)}/{uuid.uuid4()}",
+            "generated_at": _iso_utc(generated_at),
+            "timezone": str(self.timezone),
+            "range": {
+                "start_local": start_local.isoformat(),
+                "end_local_exclusive": end_local.isoformat(),
+                "days": days,
+            },
+            "events": events,
+            "tasks": tasks,
+            "counts": {
+                "events": len(events),
+                "tasks": len(tasks),
+                "overdue_tasks": sum(1 for task in tasks if task["overdue"]),
+                "undated_tasks": sum(1 for task in tasks if task["due"] is None),
+            },
+            "complete": not errors,
+            "errors": errors,
+        }
+
+
+def _validate_snapshot_days(days: int) -> int:
+    try:
+        days = int(days)
+    except (TypeError, ValueError) as error:
+        raise NextcloudError(f"days must be an integer, got {days!r}") from error
+    if not 1 <= days <= 31:
+        raise NextcloudError(f"days must be between 1 and 31, got {days}")
+    return days
+
+
+def _classify_snapshot_task(
+    task: dict,
+    start_utc: datetime.datetime,
+    end_utc: datetime.datetime,
+    include_overdue: bool,
+    include_undated: bool,
+) -> dict | None:
+    if task.get("COMPLETED") or task.get("STATUS") == "COMPLETED":
+        return None
+    due = task.get("due_datetime")
+    if due is None:
+        if not include_undated:
+            return None
+        overdue = False
+    elif due < start_utc:
+        if not include_overdue:
+            return None
+        overdue = True
+    elif due >= end_utc:
+        return None
+    else:
+        overdue = False
+    return _serialize_snapshot_task(task, overdue)
+
+
+def _serialize_snapshot_event(event: dict) -> dict:
+    start = _iso_utc(event["start_datetime"])
+    uid = event.get("UID", "")
+    recurrence_id = event.get("RECURRENCE-ID")
+    return {
+        "key": f"{event['calendar']}/{uid}/{recurrence_id or start}",
+        "uid": uid,
+        "recurrence_id": recurrence_id,
+        "calendar": event["calendar"],
+        "title": _single_line(event.get("SUMMARY") or "Untitled event"),
+        "description": _single_line(event.get("DESCRIPTION", "")),
+        "location": _single_line(event.get("LOCATION", "")),
+        "start": start,
+        "end": _iso_utc(event["end_datetime"]) if event.get("end_datetime") else None,
+        "all_day": event.get("all_day", False),
+        "status": event.get("STATUS", "CONFIRMED"),
+        "reminder_minutes_before": event.get("reminder_minutes_before", 0),
+        "last_modified": _iso_property_utc(event.get("LAST-MODIFIED")),
+    }
+
+
+def _serialize_snapshot_task(task: dict, overdue: bool) -> dict:
+    due = task.get("due_datetime")
+    uid = task.get("UID", "")
+    return {
+        "key": f"{task['calendar']}/{uid}",
+        "uid": uid,
+        "list": task["calendar"],
+        "title": _single_line(task.get("SUMMARY") or "Untitled task"),
+        "description": _single_line(task.get("DESCRIPTION", "")),
+        "due": _iso_utc(due) if due else None,
+        "status": task.get("STATUS", "NEEDS-ACTION"),
+        "percent_complete": _int_or_default(task.get("PERCENT-COMPLETE"), 0),
+        "priority": _int_or_default(task.get("PRIORITY"), None),
+        "categories": _split_categories(task.get("CATEGORIES")),
+        "overdue": overdue,
+        "reminder_minutes_before": task.get("reminder_minutes_before", 0),
+        "last_modified": _iso_property_utc(task.get("LAST-MODIFIED")),
+    }
+
+
+def _iso_utc(value: datetime.datetime) -> str:
+    return value.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _iso_property_utc(value: str | None) -> str | None:
+    parsed = _parse_ical_datetime(value, None, datetime.UTC)
+    return _iso_utc(parsed) if parsed else None
+
+
+def _int_or_default(value: str | None, default: int | None) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _split_categories(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _selector_set(selector: str | None) -> frozenset[str]:
+    if not selector:
+        return frozenset()
+    return frozenset(
+        item.strip().casefold() for item in selector.split(",") if item.strip()
+    )
+
+
+def _calendar_matches(calendar: Calendar, wanted: frozenset[str]) -> bool:
+    return bool(wanted & {calendar.name.casefold(), calendar.slug.casefold()})
+
+
+_ALARM_DURATION_RE = re.compile(
+    r"^(?P<sign>[-+]?)P(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?$"
+)
+
+
+def _trigger_minutes(value: str) -> int:
+    """Minutes-before-start for an iCalendar VALARM TRIGGER duration.
+
+    Returns 0 for at/after triggers or absolute (VALUE=DATE-TIME) triggers.
+    Example: _trigger_minutes("-PT10M") -> 10.
+    """
+    match = _ALARM_DURATION_RE.match(value.strip())
+    if not match or match.group("sign") != "-":
+        return 0
+    weeks = int(match.group("weeks") or 0)
+    days = int(match.group("days") or 0)
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    return ((weeks * 7 + days) * 24 + hours) * 60 + minutes
+
+
+def _alarm_minutes_by_uid(text: str, component_name: str) -> dict[str, int]:
+    """Map each component UID to its first VALARM lead in minutes-before.
+
+    Kept separate from _parse_ical_components, which intentionally drops nested
+    VALARM data. Example: {"task-uid": 10} for a VTODO with TRIGGER -PT10M.
+    """
+    result: dict[str, int] = {}
+    uid: str | None = None
+    trigger: int | None = None
+    in_component = in_alarm = False
+    for line in _unfold_ical(text):
+        upper = line.upper()
+        if upper == f"BEGIN:{component_name}":
+            in_component, uid, trigger = True, None, None
+        elif upper == f"END:{component_name}":
+            if uid is not None and uid not in result:
+                result[uid] = trigger or 0
+            in_component = False
+        elif not in_component:
+            continue
+        elif upper == "BEGIN:VALARM":
+            in_alarm = True
+        elif upper == "END:VALARM":
+            in_alarm = False
+        elif not in_alarm and upper.startswith("UID:"):
+            uid = line.split(":", 1)[1]
+        elif in_alarm and trigger is None and upper.startswith("TRIGGER"):
+            trigger = _trigger_minutes(line.split(":", 1)[1])
+    return result
 
 
 def _unfold_ical(text: str) -> list[str]:
