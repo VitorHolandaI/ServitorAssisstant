@@ -150,6 +150,11 @@ class TranscribeAudioTests(unittest.IsolatedAsyncioTestCase):
             result = await self._server().transcribe_audio(object())
         self.assertEqual(result, "esta frase e valida e longa o suficiente")
 
+    async def test_plain_text_result_passes_through(self):
+        with patch("server.Server.sr", self._fake_sr("esta frase e valida e longa o suficiente")):  # noqa: E501
+            result = await self._server().transcribe_audio(object())
+        self.assertEqual(result, "esta frase e valida e longa o suficiente")
+
 
 if __name__ == "__main__":
     unittest.main()

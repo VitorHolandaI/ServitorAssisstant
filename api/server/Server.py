@@ -260,8 +260,12 @@ class ServitorServer:
             if not raw or not raw.strip():
                 logger.info("[Server] vosk returned empty result")
                 return None
-            parsed = json.loads(raw)
-            talk = parsed.get("text", "").strip()
+            raw = raw.strip()
+            if raw.startswith("{"):
+                parsed = json.loads(raw)
+                talk = parsed.get("text", "").strip()
+            else:
+                talk = raw
         except sr.UnknownValueError:
             logger.warning("[Server] vosk could not understand audio")
             return None
