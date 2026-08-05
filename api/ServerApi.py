@@ -8,12 +8,12 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 
-from fastapi import FastAPI, UploadFile, HTTPException
+from fastapi import FastAPI, UploadFile, HTTPException, Form
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from server import ServitorServer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 
 import uvicorn
 
@@ -337,14 +337,18 @@ async def delete_task_api(task_id: int):
 
 
 @app.post("/file_recorded")
-async def create_upload_file(my_file: UploadFile):
-    logger.info(f"[API] file_recorded: {my_file.filename}")
+async def create_upload_file(my_file: UploadFile, response_format: str = Form("text")):
+    logger.info(f"[API] file_recorded: {my_file.filename} response_format={response_format}")
     file = my_file.file
-    audio_bytes = await Servitor.process_audio(file)
-    if audio_bytes is None:
+    if response_format == "audio":
+        audio_bytes = await Servitor.process_audio(file)
+        if audio_bytes is None:
+            return {"status": "ignored", "reason": "short or noise input"}
+        return Response(content=audio_bytes, media_type="audio/wav")
+    response = await Servitor.process_audio_text(file)
+    if response is None:
         return {"status": "ignored", "reason": "short or noise input"}
-    Servitor.send_audio_bytes(audio_bytes)
-    return {"filename": my_file.filename}
+    return {"response": response}
 
 
 if __name__ == "__main__":

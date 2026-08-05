@@ -242,17 +242,24 @@ class ServitorServer:
             self.voice.synthesize_wav(text, wav_file, syn_config=syn_config_1)
         return bytes_audio.getvalue()
 
-    async def process_audio(self, audio_file):
-        logger.info("[Server] process_audio")
+    async def transcribe_audio(self, audio_file) -> str | None:
+        logger.info("[Server] transcribe_audio")
         r = sr.Recognizer()
 
-        with sr.AudioFile(audio_file) as source:
-            audio = r.record(source)
+        try:
+            with sr.AudioFile(audio_file) as source:
+                audio = r.record(source)
+        except ValueError as e:
+            logger.warning(f"[Server] audio file could not be read: {e}")
+            return None
 
         talk = ""
         try:
             raw = r.recognize_vosk(audio)
-            logger.debug(f"[Server] vosk raw: {raw}")
+            logger.debug(f"[Server] vosk raw: {raw!r}")
+            if not raw or not raw.strip():
+                logger.info("[Server] vosk returned empty result")
+                return None
             parsed = json.loads(raw)
             talk = parsed.get("text", "").strip()
         except sr.UnknownValueError:
@@ -261,13 +268,26 @@ class ServitorServer:
         except sr.RequestError as e:
             logger.error(f"[Server] vosk request error: {e}")
             return None
+        except json.JSONDecodeError as e:
+            logger.warning(f"[Server] vosk invalid result: {e}")
+            return None
 
         logger.info(f"[Server] recognized: {talk!r}")
         if len(talk) < 10 or len(talk.split()) < 3:
-            logger.info(f"[Server] short/noise input, skipping")
+            logger.info("[Server] short/noise input, skipping")
             return None
+        return talk
 
-        talk = await self.process_ollama(talk)
+    async def process_audio_text(self, audio_file) -> str | None:
+        talk = await self.transcribe_audio(audio_file)
+        if talk is None:
+            return None
+        return await self.process_ollama(talk)
+
+    async def process_audio(self, audio_file):
+        talk = await self.process_audio_text(audio_file)
+        if talk is None:
+            return None
         return self.generate_audio(talk)
 
     async def check_due_reminders(self):
