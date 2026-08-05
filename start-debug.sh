@@ -25,6 +25,8 @@ err()  { echo -e "${RED}[ERROR]${NC} $1"; }
 dbg()  { echo -e "${MAGENTA}[DEBUG]${NC} $1"; }
 
 cleanup() {
+    local exit_code="${1:-0}"
+    trap - SIGINT SIGTERM
     echo ""
     log "Shutting down all services..."
     for pid in "${PIDS[@]}"; do
@@ -34,10 +36,10 @@ cleanup() {
     done
     wait 2>/dev/null
     log "All services stopped."
-    exit 0
+    exit "$exit_code"
 }
 
-trap cleanup SIGINT SIGTERM
+trap 'cleanup 0' SIGINT SIGTERM
 
 mkdir -p "$ROOT_DIR/logs"
 
@@ -121,4 +123,12 @@ echo ""
 echo -e "  ${MAGENTA}Press Ctrl+C to stop all services${NC}"
 echo ""
 
-wait
+set +e
+wait -n "${PIDS[@]}"
+EXIT_CODE=$?
+set -e
+if [ "$EXIT_CODE" -eq 0 ]; then
+    EXIT_CODE=1
+fi
+err "A managed process stopped unexpectedly; restarting the stack."
+cleanup "$EXIT_CODE"
