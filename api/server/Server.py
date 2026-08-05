@@ -6,6 +6,7 @@ import logging
 import sqlite3
 import datetime
 import requests
+from zoneinfo import ZoneInfo
 from io import BytesIO
 from pathlib import Path
 from piper import PiperVoice
@@ -62,10 +63,32 @@ class ServitorServer:
             "NEVER guess, invent, or hallucinate information about the user's tasks, weather, "
             "or development activity — always use the available tools. "
             "When the user asks about tasks ('list tasks', 'quais tasks', 'mostre tasks', "
-            "'tasks pendentes', 'minhas tasks', 'o que tem pra fazer', or similar), "
+            "'tasks pendentes', 'minhas tasks', 'atividades do Nextcloud', 'Nextcloud Tasks', "
+            "'o que tem pra fazer', or similar), "
             "ALWAYS call list_nextcloud_tasks() first and only respond based on the tool result. "
+            "If the user asks for 'all tasks' or 'todas as tasks', call "
+            "list_nextcloud_tasks(show_completed=False, limit=20): all means all incomplete tasks, "
+            "including overdue tasks, and never completed tasks. Only set show_completed=True when "
+            "the user explicitly asks to include completed tasks or task history. Never request more than 20 tasks. "
+            "When the user names a Nextcloud task list such as TrabalhoFNDE, pass that exact name "
+            "as the calendar parameter. Use get_nextcloud_task for one task's full details, "
+            "update_nextcloud_task to edit fields or reopen it, delete_nextcloud_task only for an "
+            "explicit deletion request, and move_nextcloud_task to change its task list. "
+            "When the user asks about today's calendar, agenda, appointments, meetings, current event, "
+            "or what comes next today, ALWAYS call list_nextcloud_events() with no date first. "
+            "For another date, call list_nextcloud_events(date='YYYY-MM-DD'). Use the exact current "
+            "time and the ended/ongoing/upcoming labels returned by the tool; never infer calendar state yourself. "
             "When the user asks to create a task or reminder, use create_nextcloud_task(). "
-            "Only use the SQLite task tools when the user explicitly asks for a local task. "
+            "When the user asks to add or change a reminder on an existing Nextcloud task, "
+            "use set_nextcloud_task_reminder(). A successful reminder must be present both "
+            "on the VTODO and on its linked VEVENT; do not claim success without the tool result. "
+            "When the user asks to mark, complete, finish, or set a Nextcloud task as done, "
+            "ALWAYS call complete_nextcloud_task() with the exact title or UID. "
+            "Never claim that a task was completed unless complete_nextcloud_task returned a "
+            "successful completed or already-completed result in the current request. "
+            "Tools containing '_local_task' access only SQLite. Never call them unless the user "
+            "explicitly says 'local' or 'SQLite'. The word 'Nextcloud' always requires "
+            "list_nextcloud_tasks() or create_nextcloud_task(). "
             "When the user asks to create a task with a relative time like 'today', 'tomorrow', "
             "'at 5pm', you MUST use the current date/time provided below to calculate the exact "
             "due_at value in 'YYYY-MM-DD HH:MM:SS' format. "
@@ -118,11 +141,12 @@ class ServitorServer:
             return []
 
     def get_prompt_with_time(self):
-        now = datetime.datetime.now()
+        timezone_name = os.getenv("NC_TIMEZONE", "America/Recife")
+        now = datetime.datetime.now(ZoneInfo(timezone_name))
         return (
             f"{self.base_prompt}\n\n"
             f"CURRENT DATE AND TIME: {now.strftime('%Y-%m-%d %H:%M:%S')} "
-            f"({now.strftime('%A')}), Timezone: America/Recife"
+            f"({now.strftime('%A')}), Timezone: {timezone_name}"
         )
 
     async def process_ollama(self, talk: str):

@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import contextlib
+import re
 from mcp import ClientSession
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
@@ -30,6 +31,22 @@ def _build_messages(
     return msgs
 
 
+def _is_explicit_nextcloud_completion(message: str) -> bool:
+    normalized = message.casefold()
+    completion = re.search(
+        r"\b(marca|marque|marcar|complete|completar|conclua|concluir|conclu[ií]da|done)\b",
+        normalized,
+    )
+    if not completion or re.search(r"\b(n[aã]o)\s+(marca|marque|complete|conclua)", normalized):
+        return False
+    if re.search(r"\b(local|sqlite)\b", normalized):
+        return False
+    return bool(
+        re.search(r"\b(task|tarefa|nextcloud)\b", normalized)
+        or re.search(r"\b[0-9a-f]{8}\b", normalized)
+    )
+
+
 class llm_mcp_client():
     def __init__(self, mcp_addresses: list, model_name: str, model_address: str, system_prompt: str):
         self.mcp_addresses = mcp_addresses
@@ -41,6 +58,7 @@ class llm_mcp_client():
         self._llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive="10m", timeout=120, num_ctx=self.context_window, model_kwargs={"think": False})
         self._stack: contextlib.AsyncExitStack | None = None
         self._agent = None
+        self._tools_by_name = {}
         logger.info(f"[client2] init model={model_name} mcp={mcp_addresses}")
 
     async def _ensure_agent(self):
@@ -57,7 +75,30 @@ class llm_mcp_client():
             all_tools.extend(tools)
 
         logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
+        self._tools_by_name = {tool.name: tool for tool in all_tools}
         self._agent = create_react_agent(self._llm, all_tools)
+
+    async def _try_direct_tool(self, message: str) -> str | None:
+        if not _is_explicit_nextcloud_completion(message):
+            return None
+        tool = self._tools_by_name.get("complete_nextcloud_task")
+        if tool is None:
+            return None
+        logger.info("[client2] forced tool call: complete_nextcloud_task")
+        result = await tool.ainvoke({"task": message})
+        if isinstance(result, str):
+            return result
+        if isinstance(result, list):
+            text_blocks = [
+                item.get("text", "")
+                for item in result
+                if isinstance(item, dict) and item.get("type") == "text"
+            ]
+            if text_blocks:
+                return "\n".join(text_blocks)
+        if isinstance(result, dict) and "result" in result:
+            return str(result["result"])
+        return str(result)
 
     async def _recreate_agent(self):
         await self.cleanup()
@@ -69,11 +110,15 @@ class llm_mcp_client():
             await self._stack.aclose()
             self._stack = None
         self._agent = None
+        self._tools_by_name = {}
 
     async def get_response(self, message, history=None, system_prompt=None):
         logger.info(f"[client2] get_response: {message[:80]!r}")
         try:
             await self._ensure_agent()
+            direct_result = await self._try_direct_tool(message)
+            if direct_result is not None:
+                return {"messages": [AIMessage(content=direct_result)]}
             prompt = system_prompt or self.prompt
             msgs = _build_messages(message, history, prompt)
             response = await asyncio.wait_for(self._agent.ainvoke({"messages": msgs}), timeout=120)
@@ -94,6 +139,10 @@ class llm_mcp_client():
         logger.info(f"[client2] get_response_stream: {message[:80]!r}")
         try:
             await self._ensure_agent()
+            direct_result = await self._try_direct_tool(message)
+            if direct_result is not None:
+                yield direct_result
+                return
             prompt = system_prompt or self.prompt
             msgs = _build_messages(message, history, prompt)
             in_tool_call = False
