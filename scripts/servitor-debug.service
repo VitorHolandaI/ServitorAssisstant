@@ -1,0 +1,21 @@
+[Unit]
+Description=Servitor Assistant debug stack
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/git/ServitorAssisstant
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=/usr/bin/mkdir -p %h/git/ServitorAssisstant/logs
+ExecStart=/usr/bin/bash %h/git/ServitorAssisstant/start-debug.sh
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+UMask=0002
+StandardOutput=append:%h/git/ServitorAssisstant/logs/systemd.log
+StandardError=append:%h/git/ServitorAssisstant/logs/systemd.log
+
+[Install]
+WantedBy=default.target
