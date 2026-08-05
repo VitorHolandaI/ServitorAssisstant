@@ -840,6 +840,25 @@ END:VCALENDAR\r
         self.assertEqual(uids, {"inrange-1", "undated-1"})
         self.assertEqual(widened["counts"]["undated_tasks"], 1)
 
+    def test_snapshot_all_tasks_includes_future_dated(self):
+        vtodos = [
+            "BEGIN:VTODO\r\nUID:in-1\r\nSUMMARY:Soon\r\n"
+            "DUE:20260806T170000Z\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+            "BEGIN:VTODO\r\nUID:future-1\r\nSUMMARY:Later\r\n"
+            "DUE:20270101T170000Z\r\nSTATUS:NEEDS-ACTION\r\nEND:VTODO\r\n",
+        ]
+        client, _ = self.make_client(
+            [
+                FakeResponse(calendar_response(components=("VTODO",)), 207),
+                FakeResponse(todo_report(vtodos), 207),
+            ]
+        )
+
+        snap = client.snapshot_agenda(start_date="2026-08-04", all_tasks=True)
+
+        uids = {t["uid"] for t in snap["tasks"]}
+        self.assertEqual(uids, {"in-1", "future-1"})  # future one included
+
     def test_snapshot_agenda_rejects_out_of_range_days(self):
         client, _ = self.make_client([])
 
