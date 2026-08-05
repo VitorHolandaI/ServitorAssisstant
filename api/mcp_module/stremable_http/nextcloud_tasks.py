@@ -994,12 +994,16 @@ class NextcloudTasksClient:
         include_undated_tasks: bool = False,
         task_lists: str | None = None,
         event_calendars: str | None = None,
+        all_tasks: bool = False,
     ) -> dict:
         """Structured 7-day snapshot of events + tasks for an appliance.
 
-        Covers the half-open local range [start_date 00:00, +days 00:00).
+        Events cover the half-open local range [start_date 00:00, +days 00:00).
+        Tasks default to the same window (due-in-range + overdue + optional
+        undated); pass all_tasks=True to include every incomplete task regardless
+        of due date (full per-list task view, like the Nextcloud Tasks app).
         Returns a JSON-serializable dict; see docs/mcp/nextcloud-appliance-sync.md.
-        Example: client.snapshot_agenda(days=7) for today's local week.
+        Example: client.snapshot_agenda(days=7, all_tasks=True).
         """
         days = _validate_snapshot_days(days)
         start_local, end_local = self._snapshot_range(start_date, days)
@@ -1012,7 +1016,7 @@ class NextcloudTasksClient:
         )
         tasks = self._collect_snapshot_tasks(
             calendars, start_utc, end_utc,
-            include_overdue_tasks, include_undated_tasks, task_lists, errors,
+            include_overdue_tasks, include_undated_tasks, task_lists, errors, all_tasks,
         )
         generated_at = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
         return self._build_snapshot(
@@ -1074,6 +1078,7 @@ class NextcloudTasksClient:
         include_undated: bool,
         selector: str | None,
         errors: list[dict],
+        all_tasks: bool = False,
     ) -> list[dict]:
         try:
             task_calendars = self._task_calendars(calendars, selector)
@@ -1089,7 +1094,7 @@ class NextcloudTasksClient:
                 continue
             for task in found:
                 serialized = _classify_snapshot_task(
-                    task, start_utc, end_utc, include_overdue, include_undated
+                    task, start_utc, end_utc, include_overdue, include_undated, all_tasks
                 )
                 if serialized is not None:
                     tasks.append(serialized)
@@ -1147,10 +1152,14 @@ def _classify_snapshot_task(
     end_utc: datetime.datetime,
     include_overdue: bool,
     include_undated: bool,
+    all_tasks: bool = False,
 ) -> dict | None:
     if task.get("COMPLETED") or task.get("STATUS") == "COMPLETED":
         return None
     due = task.get("due_datetime")
+    if all_tasks:
+        # Full per-list view: every incomplete task, no date window.
+        return _serialize_snapshot_task(task, due is not None and due < start_utc)
     if due is None:
         if not include_undated:
             return None

@@ -352,6 +352,7 @@ async def sync_nextcloud_agenda(
     include_undated_tasks: bool = False,
     task_lists: str | None = None,
     event_calendars: str | None = None,
+    all_tasks: bool = False,
 ) -> str:
     """Return a structured JSON snapshot of Nextcloud events and tasks.
 
@@ -379,6 +380,7 @@ async def sync_nextcloud_agenda(
             include_undated_tasks,
             task_lists,
             event_calendars,
+            all_tasks,
         )
         return json.dumps(snapshot, ensure_ascii=False)
     except NextcloudError as error:
