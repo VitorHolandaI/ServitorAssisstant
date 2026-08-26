@@ -12,6 +12,7 @@ from fastapi import FastAPI, UploadFile, HTTPException, Form
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 from server import ServitorServer
+from server import sessions
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, Response
 
@@ -30,36 +31,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _ensure_messages_table():
-    """Create messages table if MCP server hasn't run init_db yet."""
-    if not DB_PATH.exists():
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at DATETIME NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-
-def _save_message(role: str, content: str):
+def _save_message(role: str, content: str, session_id: int | None = None) -> int:
     try:
-        conn = sqlite3.connect(DB_PATH)
-        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        conn.execute(
-            "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
-            (role, content, now)
-        )
-        conn.commit()
-        conn.close()
-        logger.debug(f"[API] saved message role={role} len={len(content)}")
+        return sessions.save_message(role, content, session_id)
     except Exception as e:
         logger.error(f"[API] _save_message error: {e}", exc_info=DEBUG)
+        return session_id or 0
 
 
 Servitor: ServitorServer | None = None
@@ -77,7 +54,7 @@ async def _reminder_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global Servitor
-    _ensure_messages_table()
+    sessions.ensure_schema()
     Servitor = ServitorServer("ServitorServer", CLIENT_IP)
     task = asyncio.create_task(_reminder_loop())
     yield
@@ -106,9 +83,10 @@ async def receive_text(data: Dict[str, Any]):
 async def stream_message(data: Dict[str, Any]):
     message = data.get("message", "No message provided")
     audio_mode = data.get("audio", False)
-    logger.info(f"[API] stream_message: {message[:80]!r} audio={audio_mode}")
+    session_id = sessions.resolve_session(data.get("session_id"))
+    logger.info(f"[API] stream_message: {message[:80]!r} audio={audio_mode} session={session_id}")
 
-    await asyncio.to_thread(_save_message, "user", message)
+    await asyncio.to_thread(_save_message, "user", message, session_id)
 
     queue: asyncio.Queue = asyncio.Queue()
 
@@ -117,7 +95,7 @@ async def stream_message(data: Dict[str, Any]):
         full_response = ""
         try:
             async with asyncio.timeout(300):
-                async for chunk_type, chunk in Servitor.process_ollama_stream(message):
+                async for chunk_type, chunk in Servitor.process_ollama_stream(message, session_id=session_id):
                     await queue.put((chunk_type, chunk))
                     if chunk_type == "text":
                         full_response += chunk
@@ -130,7 +108,7 @@ async def stream_message(data: Dict[str, Any]):
         finally:
             await queue.put(None)
             if full_response.strip():
-                await asyncio.to_thread(_save_message, "assistant", full_response)
+                await asyncio.to_thread(_save_message, "assistant", full_response, session_id)
                 logger.info(f"[API] assistant saved ({len(full_response)} chars)")
                 if audio_mode:
                     try:
@@ -154,6 +132,9 @@ async def stream_message(data: Dict[str, Any]):
                     continue
 
                 if item is None:
+                    usage = getattr(getattr(Servitor, "agent", None), "last_usage", None)
+                    if usage:
+                        yield f"data: {json.dumps({'type': 'usage', 'usage': usage})}\n\n"
                     yield f"data: {json.dumps({'done': True})}\n\n"
                     break
 
@@ -170,17 +151,52 @@ async def stream_message(data: Dict[str, Any]):
 
 
 @app.get("/conversation")
-async def get_conversation(limit: int = 100):
+async def get_conversation(limit: int = 100, session_id: int | None = None):
     if not DB_PATH.exists():
-        return {"messages": []}
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT ?",
-        (limit,)
-    ).fetchall()
-    conn.close()
-    return {"messages": [dict(r) for r in reversed(rows)]}
+        return {"messages": [], "session_id": None}
+    resolved = sessions.resolve_session(session_id)
+    return {"messages": sessions.load_messages(resolved, limit), "session_id": resolved}
+
+
+@app.get("/sessions")
+async def get_sessions():
+    return {"sessions": sessions.list_sessions(), "active_id": sessions.active_session_id()}
+
+
+class SessionCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class SessionRename(BaseModel):
+    title: str
+
+
+@app.post("/sessions")
+async def post_session(body: SessionCreate | None = None):
+    return sessions.create_session(body.title if body else None)
+
+
+@app.patch("/sessions/{session_id}")
+async def patch_session(session_id: int, body: SessionRename):
+    updated = sessions.rename_session(session_id, body.title)
+    if updated is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return updated
+
+
+@app.post("/sessions/{session_id}/activate")
+async def activate_session(session_id: int):
+    if not sessions.set_active_session(session_id):
+        raise HTTPException(404, f"Session {session_id} not found")
+    return {"active_id": session_id}
+
+
+@app.delete("/sessions/{session_id}")
+async def delete_session(session_id: int):
+    active = sessions.delete_session(session_id)
+    if active is None:
+        raise HTTPException(404, f"Session {session_id} not found")
+    return {"status": "deleted", "id": session_id, "active_id": active}
 
 
 @app.get("/context_config")
@@ -189,28 +205,36 @@ async def get_context_config():
     return {
         "max_tokens": getattr(agent, "context_window", 32768),
         "reserved_tokens": getattr(agent, "context_reserved_tokens", 5000),
-        "chars_per_token": 5,
+        "model": getattr(agent, "model_name", ""),
     }
 
 
+@app.get("/context_usage")
+async def get_context_usage(session_id: int | None = None, refresh: bool = False):
+    """Real token usage, measured with the model's own tokenizer."""
+    if Servitor is None:
+        raise HTTPException(503, "Servitor not ready")
+    agent = getattr(Servitor, "agent", None)
+    if refresh and agent is not None:
+        agent.last_usage = None
+    return await asyncio.to_thread(Servitor.context_usage, session_id)
+
+
 @app.delete("/conversation")
-async def clear_conversation():
-    if DB_PATH.exists():
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM messages")
-        conn.commit()
-        conn.close()
-    logger.info("[API] conversation cleared")
-    return {"status": "cleared"}
+async def clear_conversation(session_id: int | None = None):
+    resolved = sessions.resolve_session(session_id)
+    sessions.clear_session(resolved)
+    logger.info(f"[API] session {resolved} cleared")
+    return {"status": "cleared", "session_id": resolved}
 
 
 @app.post("/compact_conversation")
-async def compact_conversation():
+async def compact_conversation(session_id: int | None = None):
     logger.info("[API] compacting conversation")
     if Servitor is None:
         return {"compact": "Servitor not ready."}
     try:
-        compact = await Servitor.compact_conversation()
+        compact = await Servitor.compact_conversation(sessions.resolve_session(session_id))
         return {"compact": compact}
     except Exception as e:
         logger.error(f"[API] compact error: {e}", exc_info=DEBUG)

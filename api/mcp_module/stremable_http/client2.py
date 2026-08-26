@@ -56,10 +56,34 @@ class llm_mcp_client():
         self.context_window = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
         self.context_reserved_tokens = 5000
         self._llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive="10m", timeout=120, num_ctx=self.context_window, model_kwargs={"think": False})
+        self._usage_turn_open = False
         self._stack: contextlib.AsyncExitStack | None = None
         self._agent = None
         self._tools_by_name = {}
+        # Exact prompt/response token counts reported by Ollama on the last LLM
+        # call of the last turn. Authoritative — it is the model's own count.
+        self.last_usage: dict | None = None
         logger.info(f"[client2] init model={model_name} mcp={mcp_addresses}")
+
+    def _record_usage(self, message) -> None:
+        """Store token usage from an AIMessage, if the provider reported any."""
+        usage = getattr(message, "usage_metadata", None) or {}
+        meta = getattr(message, "response_metadata", None) or {}
+        input_tokens = usage.get("input_tokens") or meta.get("prompt_eval_count")
+        output_tokens = usage.get("output_tokens") or meta.get("eval_count")
+        if not input_tokens:
+            return
+        previous = (self.last_usage or {}).get("input_tokens", 0)
+        if input_tokens < previous and self._usage_turn_open:
+            # A react turn makes several calls; the largest prompt is the one
+            # that actually sized the context window.
+            return
+        self.last_usage = {
+            "input_tokens": int(input_tokens),
+            "output_tokens": int(output_tokens or 0),
+            "context_window": self.context_window,
+            "model": self.model_name,
+        }
 
     async def _ensure_agent(self):
         if self._agent is not None:
@@ -124,10 +148,14 @@ class llm_mcp_client():
             response = await asyncio.wait_for(self._agent.ainvoke({"messages": msgs}), timeout=120)
 
             tool_calls_used = []
+            self.last_usage = None
+            self._usage_turn_open = True
             for msg in response["messages"]:
-                if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
-                    for call in msg.tool_calls:
+                if isinstance(msg, AIMessage):
+                    self._record_usage(msg)
+                    for call in getattr(msg, "tool_calls", None) or []:
                         tool_calls_used.append(call.get("name"))
+            self._usage_turn_open = False
             logger.info(f"[client2] tool calls: {tool_calls_used}")
             return response
         except Exception as error:
@@ -146,6 +174,8 @@ class llm_mcp_client():
             prompt = system_prompt or self.prompt
             msgs = _build_messages(message, history, prompt)
             in_tool_call = False
+            self.last_usage = None
+            self._usage_turn_open = True
             async for event in self._agent.astream_events({"messages": msgs}, version="v2"):
                 event_type = event["event"]
 
@@ -163,6 +193,9 @@ class llm_mcp_client():
 
                 elif event_type == "on_chat_model_end":
                     in_tool_call = False
+                    output = event["data"].get("output")
+                    if output is not None:
+                        self._record_usage(output)
 
                 elif event_type == "on_tool_start":
                     logger.info(f"[client2] tool call: {event.get('name')}")
@@ -175,3 +208,7 @@ class llm_mcp_client():
             logger.error(f"[client2] stream error: {error}", exc_info=DEBUG)
             await self._recreate_agent()
             raise
+        finally:
+            self._usage_turn_open = False
+            if self.last_usage:
+                logger.info(f"[client2] usage: {self.last_usage}")

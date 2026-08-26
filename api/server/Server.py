@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import speech_recognition as sr
 from piper import SynthesisConfig
 from mcp_module.stremable_http.client2 import llm_mcp_client
+from server import sessions, tokens
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
 
@@ -121,15 +122,18 @@ class ServitorServer:
         )
         self.agent = agent_mcp
 
-    def _load_history(self) -> list:
+    def _load_history(self, session_id: int | None = None) -> list:
         if not DB_PATH.exists():
             logger.debug("[Server] DB not found, returning empty history")
             return []
         try:
+            session_id = sessions.resolve_session(session_id)
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT role, content, created_at FROM messages ORDER BY id DESC LIMIT 200"
+                "SELECT role, content, created_at FROM messages WHERE session_id = ? "
+                "ORDER BY id DESC LIMIT 200",
+                (session_id,),
             ).fetchall()
             conn.close()
 
@@ -157,9 +161,9 @@ class ServitorServer:
             f"({now.strftime('%A')}), Timezone: {timezone_name}"
         )
 
-    async def process_ollama(self, talk: str):
+    async def process_ollama(self, talk: str, session_id: int | None = None):
         logger.info(f"[Server] process_ollama: {talk[:80]!r}")
-        history = self._load_history()
+        history = self._load_history(session_id)
         response = await self.agent.get_response(talk, history=history, system_prompt=self.get_prompt_with_time())
 
         if response is None:
@@ -175,7 +179,7 @@ class ServitorServer:
             logger.error(f"[Server] process_ollama parse error: {e}", exc_info=DEBUG)
             return "Some error occurred"
 
-    async def process_ollama_stream(self, talk: str):
+    async def process_ollama_stream(self, talk: str, session_id: int | None = None):
         """Yields (type, content) tuples where type is 'thinking' or 'text'."""
         logger.info(f"[Server] process_ollama_stream: {talk[:80]!r}")
 
@@ -197,7 +201,7 @@ class ServitorServer:
 
         inside_thinking = False
         buffer = ""
-        history = self._load_history()
+        history = self._load_history(session_id)
 
         try:
             async for chunk in self.agent.get_response_stream(talk, history=history, system_prompt=self.get_prompt_with_time()):
@@ -317,13 +321,18 @@ class ServitorServer:
         return text.strip()
 
     async def process_audio_text(self, audio_file) -> str | None:
+        """Voice turns land in whatever session the UI currently has active."""
         talk = await self.transcribe_audio(audio_file)
         if talk is None:
             return None
-        response = await self.process_ollama(talk)
+        session_id = sessions.active_session_id()
+        sessions.save_message("user", talk, session_id=session_id)
+        response = await self.process_ollama(talk, session_id=session_id)
         if response is None:
             return None
-        return self._strip_markdown(response)
+        spoken = self._strip_markdown(response)
+        sessions.save_message("assistant", response, session_id=session_id)
+        return spoken
 
     async def process_audio(self, audio_file):
         talk = await self.process_audio_text(audio_file)
@@ -369,8 +378,9 @@ class ServitorServer:
 
         return reminded
 
-    async def compact_conversation(self) -> str:
-        history = self._load_history()
+    async def compact_conversation(self, session_id: int | None = None) -> str:
+        session_id = sessions.resolve_session(session_id)
+        history = self._load_history(session_id)
         if not history:
             return "No conversation to compact."
 
@@ -383,21 +393,60 @@ class ServitorServer:
             f"{convo_text}"
         )
 
-        response = await self.process_ollama(prompt)
+        response = await self.process_ollama(prompt, session_id=session_id)
         if response in ("Some error occurred", None):
             return "Compact failed."
 
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM messages")
-        now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        conn.execute(
-            "INSERT INTO messages (role, content, created_at) VALUES (?, ?, ?)",
-            ("assistant", response, now)
-        )
-        conn.commit()
-        conn.close()
-        logger.info(f"[Server] conversation compacted: {len(response)} chars")
+        sessions.clear_session(session_id)
+        sessions.save_message("assistant", response, session_id=session_id)
+        logger.info(f"[Server] session {session_id} compacted: {len(response)} chars")
         return response
+
+    def context_usage(self, session_id: int | None = None) -> dict:
+        """Token usage for a session, counted by the model's own tokenizer.
+
+        Prefers the prompt_eval_count Ollama reported on the last real turn.
+        Falls back to re-counting the prompt that would be sent next, which
+        costs one cheap /api/chat call with num_predict=1.
+        """
+        session_id = sessions.resolve_session(session_id)
+        window = getattr(self.agent, "context_window", 32768)
+        reserved = getattr(self.agent, "context_reserved_tokens", 5000)
+
+        last = getattr(self.agent, "last_usage", None)
+        if last and last.get("input_tokens"):
+            return {
+                "session_id": session_id,
+                "used_tokens": last["input_tokens"],
+                "output_tokens": last.get("output_tokens", 0),
+                "max_tokens": window,
+                "reserved_tokens": reserved,
+                "model": last.get("model", getattr(self.agent, "model_name", "")),
+                "source": "last_turn",
+                "exact": True,
+            }
+
+        history = self._load_history(session_id)
+        messages = [{"role": "system", "content": self.get_prompt_with_time()}]
+        for role, content, created_at in history:
+            messages.append({
+                "role": "user" if role == "user" else "assistant",
+                "content": f"[{created_at}] {content}",
+            })
+        model = getattr(self.agent, "model_name", "")
+        used, exact = tokens.count_chat_tokens(
+            model, messages, tokens.tool_schemas(self.agent)
+        )
+        return {
+            "session_id": session_id,
+            "used_tokens": used,
+            "output_tokens": 0,
+            "max_tokens": window,
+            "reserved_tokens": reserved,
+            "model": model,
+            "source": "tokenizer" if exact else "estimate",
+            "exact": exact,
+        }
 
     def send_audio_bytes(self, audio_bytes):
         url = f"http://{self.client_ip}:8000/play_file"
