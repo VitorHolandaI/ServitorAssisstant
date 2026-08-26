@@ -1,313 +1,133 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import './App.css';
+import { api, type Session } from './api';
+import Sidebar from './components/Sidebar';
+import ChatView from './components/ChatView';
 import TasksPage from './TasksPage';
 
 type View = 'chat' | 'tasks';
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${import.meta.env.VITE_SERVER_IP}:8000`;
-const API_STREAM = `${API_BASE}/stream_message`;
-
-interface ContextConfig {
-  maxTokens: number;
-  reservedTokens: number;
-  charsPerToken: number;
-}
-
-const DEFAULT_CONTEXT: ContextConfig = {
-  maxTokens: 32768,
-  reservedTokens: 5000,
-  charsPerToken: 5,
-};
-
-interface Message {
-  id: string;
-  text: string;
-  thinking?: string;
-  sender: 'user' | 'bot';
-  timestamp: Date;
-}
-
-const ThinkingBlock = ({ content }: { content: string }) => {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="thinking-block">
-      <button className="thinking-toggle" onClick={() => setOpen(o => !o)}>
-        <span className="thinking-icon">{open ? '▾' : '▸'}</span>
-        <span>Cogitating…</span>
-      </button>
-      {open && <pre className="thinking-content">{content}</pre>}
-    </div>
-  );
-};
-
-const CTX_WARN = 0.75;
-const CTX_CRIT = 0.9;
-
-const ContextBar = ({ messages, config }: { messages: Message[]; config: ContextConfig }) => {
-  const used = useMemo(() => {
-    const messageChars = messages.reduce((acc, m) => acc + m.text.length + (m.thinking?.length ?? 0), 0);
-    return config.reservedTokens + Math.ceil(messageChars / config.charsPerToken);
-  }, [messages, config]);
-  const pct = Math.min(used / config.maxTokens, 1);
-  const available = Math.max(config.maxTokens - used, 0);
-  const color = pct >= CTX_CRIT ? '#ff4444' : pct >= CTX_WARN ? '#ffaa00' : '#44cc44';
-  return (
-    <div
-      className="context-meter"
-      title="Estimated from message characters plus reserved system prompt, tools and response space"
-    >
-      <div className="context-meter-label">
-        <span>Context ~{used.toLocaleString()} / {config.maxTokens.toLocaleString()}</span>
-        <span>{(pct * 100).toFixed(1)}% used · {available.toLocaleString()} free</span>
-      </div>
-      <div className="context-bar" role="progressbar" aria-valuenow={used} aria-valuemin={0} aria-valuemax={config.maxTokens}>
-        <div className="context-bar-fill" style={{ width: `${pct * 100}%`, background: color }} />
-      </div>
-    </div>
-  );
-};
+const DESKTOP_QUERY = '(min-width: 900px)';
 
 const App: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([
-    { id: '1', text: 'Praise the Omnissiah. How may I assist you?', sender: 'bot', timestamp: new Date() },
-  ]);
-  const [inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAudio, setIsAudio] = useState(false);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeId, setActiveId] = useState<number | null>(null);
   const [view, setView] = useState<View>('chat');
-  const [contextConfig, setContextConfig] = useState<ContextConfig>(DEFAULT_CONTEXT);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isDesktop, setIsDesktop] = useState(() => window.matchMedia(DESKTOP_QUERY).matches);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/conversation`)
-      .then(r => r.json())
-      .then(data => {
-        if (data.messages?.length > 0) {
-          setMessages(data.messages.map((m: { role: string; content: string; created_at: string }) => ({
-            id: m.created_at + m.role,
-            text: m.content,
-            sender: m.role === 'user' ? 'user' : 'bot',
-            timestamp: new Date(m.created_at),
-          })));
+    const mq = window.matchMedia(DESKTOP_QUERY);
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  const refreshSessions = useCallback(async () => {
+    const data = await api.listSessions();
+    setSessions(data.sessions);
+    return data;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listSessions()
+      .then(async data => {
+        if (cancelled) return;
+        if (data.sessions.length === 0) {
+          const created = await api.createSession();
+          if (cancelled) return;
+          setSessions([created]);
+          setActiveId(created.id);
+          return;
         }
+        setSessions(data.sessions);
+        setActiveId(data.active_id);
       })
-      .catch(err => console.warn('Failed to load conversation:', err));
+      .catch(err => console.warn('Falha ao carregar sessões:', err));
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    fetch(`${API_BASE}/context_config`)
-      .then(r => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then(data => setContextConfig({
-        maxTokens: data.max_tokens,
-        reservedTokens: data.reserved_tokens,
-        charsPerToken: data.chars_per_token,
-      }))
-      .catch(err => console.warn('Failed to load context config:', err));
-  }, []);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleClearConversation = async () => {
-    await fetch(`${API_BASE}/conversation`, { method: 'DELETE' }).catch(err => console.warn('Failed to clear conversation:', err));
-    setMessages([{
-      id: Date.now().toString(),
-      text: 'Praise the Omnissiah. How may I assist you?',
-      sender: 'bot',
-      timestamp: new Date(),
-    }]);
+  const selectSession = async (id: number) => {
+    setActiveId(id);
+    setView('chat');
+    if (!isDesktop) setSidebarOpen(false);
+    // The backend keeps the active session so the ESP32 voice path writes here too.
+    await api.activateSession(id).catch(err => console.warn('Falha ao ativar sessão:', err));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputValue.trim() || isLoading) return;
-
-    const text = inputValue.trim();
-
-    if (text === '/compact') {
-      setIsLoading(true);
-      try {
-        const resp = await fetch(`${API_BASE}/compact_conversation`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const compactText = data.compact || data.response || '(compacted)';
-          setMessages([{
-            id: Date.now().toString(),
-            text: `${compactText}\n\n— Conversation compacted —`,
-            sender: 'bot',
-            timestamp: new Date(),
-          }]);
-        }
-      } catch (err) {
-        console.warn('[chat] compact error:', err);
-      } finally {
-        setInputValue('');
-        setIsLoading(false);
-      }
-      return;
-    }
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: inputValue,
-      sender: 'user',
-      timestamp: new Date(),
-    };
-    setMessages(prev => [...prev, userMessage]);
-    setInputValue('');
-    setIsLoading(true);
-
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), 10 * 60 * 1000);
-
+  const createSession = async () => {
     try {
-      const response = await fetch(API_STREAM, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: inputValue, audio: isAudio }),
-        signal: abortController.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const botMessageId = Date.now().toString();
-      setMessages(prev => [...prev, {
-        id: botMessageId, text: '', thinking: undefined, sender: 'bot', timestamp: new Date(),
-      }]);
-
-      const reader = response.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let streamDone = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          try {
-            const parsed = JSON.parse(line.slice(6));
-            if (parsed.done) { streamDone = true; break; }
-            if (!parsed.content) continue;
-
-            if (parsed.type === 'thinking') {
-              setMessages(prev => prev.map(msg =>
-                msg.id === botMessageId
-                  ? { ...msg, thinking: (msg.thinking ?? '') + parsed.content }
-                  : msg
-              ));
-            } else {
-              setMessages(prev => prev.map(msg =>
-                msg.id === botMessageId
-                  ? { ...msg, text: msg.text + parsed.content }
-                  : msg
-              ));
-            }
-          } catch { /* skip malformed */ }
-        }
-        if (streamDone) break;
-      }
-    } catch (error) {
-      const isTimeout = error instanceof DOMException && error.name === 'AbortError';
-      const msg = isTimeout
-        ? 'Request timed out after 10 minutes.'
-        : error instanceof Error
-          ? `Error: ${error.message}`
-          : 'An error occurred. Please try again.';
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        text: msg,
-        sender: 'bot',
-        timestamp: new Date(),
-      }]);
-      console.warn('[chat] fetch error:', error);
-    } finally {
-      clearTimeout(timeoutId);
-      setIsLoading(false);
+      const s = await api.createSession();
+      setSessions(prev => [s, ...prev]);
+      setActiveId(s.id);
+      setView('chat');
+      if (!isDesktop) setSidebarOpen(false);
+    } catch (err) {
+      console.warn('Falha ao criar sessão:', err);
     }
   };
+
+  const deleteSession = async (id: number) => {
+    try {
+      const { active_id } = await api.deleteSession(id);
+      const data = await refreshSessions();
+      const next = data.sessions.some(s => s.id === active_id) ? active_id : data.sessions[0]?.id ?? null;
+      if (next === null) {
+        const s = await api.createSession();
+        setSessions([s]);
+        setActiveId(s.id);
+        return;
+      }
+      if (id === activeId) {
+        setActiveId(next);
+        await api.activateSession(next).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Falha ao apagar sessão:', err);
+    }
+  };
+
+  const renameSession = async (id: number, title: string) => {
+    setSessions(prev => prev.map(s => (s.id === id ? { ...s, title } : s)));
+    await api.renameSession(id, title).catch(err => console.warn('Falha ao renomear:', err));
+  };
+
+  const activeTitle = sessions.find(s => s.id === activeId)?.title ?? 'Servitor';
 
   return (
     <div className="app">
-      <div className="chat-container">
-        <header className="chat-header">
-          <div className="header-title">
-            <span className="header-cog">⚙</span>
-            <span>SERVITOR</span>
-            <span className="header-cog">⚙</span>
-          </div>
-          <div className="header-sub">Adeptus Mechanicus Interface</div>
-          <ContextBar messages={messages} config={contextConfig} />
-          <div className="view-tabs">
-            <button
-              className={`tab ${view === 'chat' ? 'active' : ''}`}
-              onClick={() => setView('chat')}
-            >Chat</button>
-            <button
-              className={`tab ${view === 'tasks' ? 'active' : ''}`}
-              onClick={() => setView('tasks')}
-            >Tasks</button>
-          </div>
-        </header>
+      <Sidebar
+        sessions={sessions}
+        activeId={activeId}
+        view={view}
+        open={isDesktop || sidebarOpen}
+        onSelect={selectSession}
+        onCreate={createSession}
+        onDelete={deleteSession}
+        onRename={renameSession}
+        onView={v => { setView(v); if (!isDesktop) setSidebarOpen(false); }}
+        onClose={() => setSidebarOpen(false)}
+      />
 
-        {view === 'tasks' ? <TasksPage /> : <>
-        <div className="messages-container">
-          {messages.map(message => (
-            <div key={message.id} className={`message ${message.sender}`}>
-              {message.thinking && <ThinkingBlock content={message.thinking} />}
-              <div className="message-text">{message.text}</div>
-              <div className="message-time">
-                {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-            </div>
-          ))}
-
-          {isLoading && (
-            <div className="message bot typing">
-              <div className="typing-indicator">
-                <span /><span /><span />
-              </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
-
-        <form className="input-area" onSubmit={handleSubmit}>
-          <div className="input-row">
-            <input
-              type="text"
-              value={inputValue}
-              onChange={e => setInputValue(e.target.value)}
-              placeholder="Transmit your query…"
-              disabled={isLoading}
-              className="message-input"
-            />
-            <button type="submit" className="btn-send" disabled={isLoading || !inputValue.trim()}>
-              Send
-            </button>
-          </div>
-          <div className="controls-row">
-            <label className="toggle-label">
-              <input type="checkbox" checked={isAudio} onChange={() => setIsAudio(a => !a)} />
-              <span>Audio Mode</span>
-            </label>
-            <button type="button" className="btn-clear" onClick={handleClearConversation} disabled={isLoading}>
-              New Conversation
-            </button>
-          </div>
-        </form>
-        </>}
-      </div>
+      <main className="main-pane">
+        {view === 'tasks' ? (
+          <section className="chat-pane">
+            <header className="chat-topbar">
+              <button className="btn-icon menu-toggle" onClick={() => setSidebarOpen(true)} title="Sessões">☰</button>
+              <div className="topbar-title">Tasks</div>
+            </header>
+            <TasksPage />
+          </section>
+        ) : (
+          <ChatView
+            sessionId={activeId}
+            sessionTitle={activeTitle}
+            onActivity={() => { refreshSessions().catch(() => {}); }}
+            onToggleSidebar={() => setSidebarOpen(o => !o)}
+          />
+        )}
+      </main>
     </div>
   );
 };
