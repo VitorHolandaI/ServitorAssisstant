@@ -14,7 +14,7 @@ from piper import PiperVoice
 from dotenv import load_dotenv
 import speech_recognition as sr
 from piper import SynthesisConfig
-from mcp_module.stremable_http.client2 import llm_mcp_client
+from mcp_module.stremable_http.client2 import McpEndpoint, llm_mcp_client
 from server import sessions, tokens
 
 DB_PATH = Path(__file__).parent.parent.parent / "data" / "tasks.db"
@@ -40,7 +40,56 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-logger.info(f"[Server] voice={voice_path}  mcp={[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES]}  debug={DEBUG}")
+
+
+def _home_assistant_endpoint() -> McpEndpoint | None:
+    """Build the Home Assistant MCP endpoint, or None when it is not configured.
+
+    Home Assistant is the only MCP server that needs a credential, so it is the
+    only one that carries one. A misconfiguration disables the endpoint instead
+    of degrading it: an unreadable token or a missing CA file must never turn
+    into an unauthenticated or unverified connection.
+    """
+    url = os.getenv("HOME_ASSISTANT_MCP_URL", "").strip()
+    if not url:
+        return None
+
+    token_file = os.getenv("HOME_ASSISTANT_TOKEN_FILE", "").strip()
+    if not token_file:
+        logger.warning("[Server] HOME_ASSISTANT_MCP_URL set but HOME_ASSISTANT_TOKEN_FILE is not; skipping")
+        return None
+
+    token_path = Path(token_file).expanduser()
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        logger.warning(f"[Server] Home Assistant MCP skipped: cannot read {token_path}: {error}")
+        return None
+    if not token:
+        logger.warning(f"[Server] Home Assistant MCP skipped: {token_path} is empty")
+        return None
+    if token_path.stat().st_mode & 0o077:
+        logger.warning(f"[Server] {token_path} is readable by other users; chmod 600 it")
+
+    ca_bundle = None
+    ca_file = os.getenv("HOME_ASSISTANT_CA_BUNDLE", "").strip()
+    if ca_file:
+        ca_path = Path(ca_file).expanduser()
+        if not ca_path.is_file():
+            logger.warning(f"[Server] Home Assistant MCP skipped: CA bundle {ca_path} not found")
+            return None
+        ca_bundle = str(ca_path)
+
+    logger.info(f"[Server] Home Assistant MCP enabled at {url} (ca={ca_bundle or 'system store'})")
+    return McpEndpoint(url=url, headers={"Authorization": f"Bearer {token}"}, ca_bundle=ca_bundle)
+
+
+MCP_ENDPOINTS = [MCP_ADDRESS, *MCP_EXTRA_ADDRESSES]
+_home_assistant = _home_assistant_endpoint()
+if _home_assistant is not None:
+    MCP_ENDPOINTS.append(_home_assistant)
+
+logger.info(f"[Server] voice={voice_path}  mcp={MCP_ENDPOINTS}  debug={DEBUG}")
 
 
 class ServitorServer:
@@ -104,6 +153,19 @@ class ServitorServer:
             "After calling summarize_weekly_dev_activity, respond with a concise human summary of the activity. "
             "Do NOT reinterpret raw event names like mirror_sync_push or mirror_sync_create as user support questions. "
             "Treat those values only as activity labels from the source system. "
+            "HOME AUTOMATION: lights, switches, media players and rooms live in Home Assistant. "
+            "When the user asks about the state of the house ('a luz ta acesa?', 'como ta o "
+            "escritorio', 'quais dispositivos', 'liga a luz'), ALWAYS call GetLiveContext "
+            "first: it lists every device with its area and current state, and it is the only "
+            "source of valid device names. Then act with HassTurnOn or HassTurnOff, and use "
+            "HassLightSet to change brightness or colour temperature. The office lamp is "
+            "exposed as 'lampEscritorip' in the area 'escritorio'. "
+            "Never claim a device was turned on, turned off or changed unless the tool "
+            "returned success in the current request, and never invent device names. "
+            "The Home Assistant list tools (todo_get_items, HassListAddItem, "
+            "HassListCompleteItem, HassListRemoveItem) manage shopping lists inside the house "
+            "and are NOT the user's tasks. Never use them for tasks, reminders, agenda or "
+            "anything Nextcloud; those always go through the list_nextcloud_tasks family. "
             "FORMATTING: NEVER use markdown, asterisks, bold, italics, headings, bullet markers "
             "(*, **, #, -, >), or any formatting symbols in responses. Plain text only, "
             "with numbers and line breaks for structure. "
@@ -115,7 +177,7 @@ class ServitorServer:
 
         ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
-            mcp_addresses=[MCP_ADDRESS, *MCP_EXTRA_ADDRESSES],
+            mcp_addresses=MCP_ENDPOINTS,
             model_name="gemma4:e2b-it-qat",
             model_address=ollama_host,
             system_prompt=self.base_prompt

@@ -1,17 +1,67 @@
-import os
 import asyncio
-import logging
 import contextlib
+import logging
+import os
 import re
-from mcp import ClientSession
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
+from dataclasses import dataclass, field
+
+import httpx
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
+from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class McpEndpoint:
+    """One MCP server plus the credentials and trust that belong to it alone.
+
+    Servers are not interchangeable: the Home Assistant endpoint needs a bearer
+    token and a private CA, and neither may leak to the local servers on :8001
+    and :8002. Keeping them per endpoint is what makes that impossible.
+    """
+
+    url: str
+    headers: dict[str, str] = field(default_factory=dict)
+    ca_bundle: str | None = None
+
+    def __repr__(self) -> str:
+        # Endpoints end up in log lines; the default repr would print the token.
+        return f"McpEndpoint({self.url})"
+
+    def __str__(self) -> str:
+        return self.url
+
+
+def _open_endpoint(endpoint):
+    """Open a streamable-HTTP connection, honouring per-endpoint auth and CA."""
+    if isinstance(endpoint, str):
+        return streamablehttp_client(endpoint)
+
+    if endpoint.ca_bundle is None:
+        return streamablehttp_client(endpoint.url, headers=endpoint.headers or None)
+
+    def factory(headers=None, timeout=None, auth=None) -> httpx.AsyncClient:
+        # Mirrors mcp.shared._httpx_utils.create_mcp_http_client, but pins trust
+        # to the private CA instead of the system store. Never verify=False.
+        return httpx.AsyncClient(
+            headers=headers,
+            timeout=timeout or httpx.Timeout(30.0, read=300.0),
+            auth=auth,
+            follow_redirects=True,
+            verify=endpoint.ca_bundle,
+        )
+
+    return streamablehttp_client(
+        endpoint.url,
+        headers=endpoint.headers or None,
+        httpx_client_factory=factory,
+    )
 
 
 def _build_messages(
@@ -89,7 +139,7 @@ class llm_mcp_client():
         if self._agent is not None:
             return
         self._stack = contextlib.AsyncExitStack()
-        clients = [await self._stack.enter_async_context(streamablehttp_client(addr)) for addr in self.mcp_addresses]
+        clients = [await self._stack.enter_async_context(_open_endpoint(addr)) for addr in self.mcp_addresses]
         sessions = [await self._stack.enter_async_context(ClientSession(read, write)) for read, write, _ in clients]
 
         all_tools = []
