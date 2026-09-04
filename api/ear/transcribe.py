@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import wave
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
@@ -27,6 +28,17 @@ import numpy as np
 from ear.devices import guard_device
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """What was said, and which language it was said in."""
+
+    text: str
+    language: str = "en"
+
+    def __bool__(self) -> bool:
+        return bool(self.text)
 
 
 def wav_to_float32(wav_bytes: bytes) -> np.ndarray:
@@ -63,13 +75,16 @@ class OpenVinoWhisper:
             str(self.model_dir), self.device, CACHE_DIR=str(self.cache_dir)
         )
 
-    def transcribe(self, wav_bytes: bytes) -> str:
+    def transcribe(self, wav_bytes: bytes) -> Transcript:
         audio = wav_to_float32(wav_bytes)
         if audio.size == 0:
-            return ""
+            return Transcript("")
         # Built and dropped per call on purpose — see the module docstring.
         pipeline = self._pipeline()
         try:
-            return str(pipeline.generate(audio)).strip()
+            result = pipeline.generate(audio)
+            # `language` comes back decorated, e.g. "<|en|>"; keep the code.
+            language = str(getattr(result, "language", "") or "en").strip("<|>") or "en"
+            return Transcript(str(result).strip(), language)
         finally:
             del pipeline

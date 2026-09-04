@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from ear.brain import LocalBrain
 from ear.ear import EarConfig
 from ear.transcribe import OpenVinoWhisper
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Reply:
+    """An answer, and the language it should be spoken in."""
+
+    text: str
+    language: str = "en"
 
 
 class LocalAssistant:
@@ -22,14 +31,16 @@ class LocalAssistant:
         self.whisper.warm()
         self.brain.warm()
 
-    def __call__(self, wav_bytes: bytes) -> str | None:
+    def __call__(self, wav_bytes: bytes) -> Reply | None:
         heard = self.whisper.transcribe(wav_bytes)
-        logger.info(f"[Assistant] heard: {heard!r}")
+        logger.info(f"[Assistant] heard [{heard.language}]: {heard.text!r}")
         if not heard:
             return None
-        reply = self.brain.answer(heard)
-        logger.info(f"[Assistant] reply: {reply!r}")
-        return reply or None
+        answer = self.brain.answer(heard.text)
+        logger.info(f"[Assistant] reply: {answer!r}")
+        # Spoken back in the language it was asked in, using the voice that
+        # actually belongs to that language.
+        return Reply(answer, heard.language) if answer else None
 
 
 def build(config: EarConfig) -> LocalAssistant | None:

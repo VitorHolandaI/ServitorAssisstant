@@ -46,6 +46,16 @@ class EarConfig:
     wake_phrase: str = "hey oracle"
     vosk_model: Path = REPO_ROOT / "voice_models" / "vosk-model-small-en-us-0.15"
     voice: Path = REPO_ROOT / "voice_models" / "en_US-ryan-medium.onnx"
+    # Kokoro sounds markedly more natural than Piper, but needs numpy 2.x,
+    # which gruut forbids in this environment. It therefore runs in its own
+    # virtualenv, driven as a subprocess. See api/ear/speak.py.
+    tts_python: Path = REPO_ROOT / ".venv-tts" / "bin" / "python"
+    kokoro_model: Path = REPO_ROOT / "voice_models" / "kokoro-v1.0.onnx"
+    kokoro_voices: Path = REPO_ROOT / "voice_models" / "voices-v1.0.bin"
+    tts_voice: str = "af_heart"
+    # Vox-caster processing applied to whatever voice is used: off, subtle,
+    # magos, heavy. See api/ear/voice_fx.py.
+    vox_profile: str = "heavy"
     ack_text: str = "I'm here."
     spool_dir: Path = Path.home() / ".cache" / "servitor" / "spool"
     whisper_model: Path = REPO_ROOT / "voice_models" / "whisper-base-fp16-ov"
@@ -93,6 +103,11 @@ class EarConfig:
             vosk_model=path_env("EAR_VOSK_MODEL", defaults.vosk_model),
             voice=path_env("EAR_VOICE", defaults.voice),
             ack_text=str_env("EAR_ACK_TEXT", defaults.ack_text),
+            tts_python=path_env("EAR_TTS_PYTHON", defaults.tts_python),
+            kokoro_model=path_env("EAR_KOKORO_MODEL", defaults.kokoro_model),
+            kokoro_voices=path_env("EAR_KOKORO_VOICES", defaults.kokoro_voices),
+            tts_voice=str_env("EAR_TTS_VOICE", defaults.tts_voice),
+            vox_profile=str_env("EAR_VOX_PROFILE", defaults.vox_profile).lower(),
             whisper_model=path_env("EAR_WHISPER_MODEL", defaults.whisper_model),
             whisper_device=str_env("EAR_WHISPER_DEVICE", defaults.whisper_device).upper(),
             llm_model=path_env("EAR_LLM_MODEL", defaults.llm_model),
@@ -176,7 +191,7 @@ class ServitorEar:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-        self._voice = None  # loaded lazily; ~61 MB and only needed to speak
+        self._voice = None  # built lazily; only needed once it has to speak
         self._ack_wav: bytes | None = None
         self._noise_floor = 200.0  # updated from real silence as it listens
 
@@ -368,7 +383,9 @@ class ServitorEar:
             self._set_state(ERROR, str(error))
             return
         if reply:
-            self._speak_text(reply)
+            # A responder may answer with plain text or with a Reply carrying
+            # the language it should be spoken in.
+            self._speak_text(getattr(reply, "text", reply), getattr(reply, "language", None))
 
     def _drain(self, stream) -> None:
         """Throw away everything the microphone heard while we were talking.
@@ -440,30 +457,23 @@ class ServitorEar:
 
     # ---------------------------------------------------------------- voice
 
-    def _load_voice(self):
+    def _speaker(self):
         if self._voice is None:
-            from piper import PiperVoice
+            from ear import speak
 
-            if not self.config.voice.is_file():
-                raise FileNotFoundError(f"Piper voice not found: {self.config.voice}")
-            self._voice = PiperVoice.load(str(self.config.voice))
-            logger.info(f"[Ear] voice loaded from {self.config.voice}")
+            self._voice = speak.build(self.config)
         return self._voice
 
-    def _synthesize(self, text: str) -> bytes:
-        voice = self._load_voice()
-        buffer = BytesIO()
-        with wave.open(buffer, "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file)
-        return buffer.getvalue()
+    def _synthesize(self, text: str, language: str | None = None) -> bytes:
+        return self._speaker().synthesize(text, language)
 
     def _ack_audio(self) -> bytes:
         if self._ack_wav is None:
             self._ack_wav = self._synthesize(self.config.ack_text)
         return self._ack_wav
 
-    def _speak_text(self, text: str) -> None:
-        self._speak_wav(self._synthesize(text))
+    def _speak_text(self, text: str, language: str | None = None) -> None:
+        self._speak_wav(self._synthesize(text, language))
 
     def _speak_wav(self, wav_bytes: bytes) -> None:
         import sounddevice as sd

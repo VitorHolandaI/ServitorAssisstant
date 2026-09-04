@@ -30,7 +30,8 @@ from ear.ear import (  # noqa: E402
     _to_wav,
 )
 from ear.devices import connected_displays, guard_device  # noqa: E402
-from ear.transcribe import wav_to_float32  # noqa: E402
+from ear.transcribe import Transcript, wav_to_float32  # noqa: E402
+from ear.voice_fx import PROFILES, VoxProfile, apply_vox  # noqa: E402
 
 EAR_ENV = {
     "EAR_WAKE_PHRASE": "",
@@ -45,6 +46,8 @@ EAR_ENV = {
     "EAR_START_ENABLED": "",
     "EAR_VAD": "",
     "EAR_ALLOW_SHARED_GPU": "",
+    "EAR_VOX_PROFILE": "",
+    "EAR_TTS_VOICE": "",
 }
 
 
@@ -80,6 +83,79 @@ class EarConfigTests(unittest.TestCase):
             self.assertFalse(EarConfig.from_env().start_enabled)
         with _env(EAR_START_ENABLED="true"):
             self.assertTrue(EarConfig.from_env().start_enabled)
+
+
+class VoxEffectTests(unittest.TestCase):
+    """The Servitor has to sound like a machine and still be understood."""
+
+    def setUp(self):
+        self.sr = 24000
+        t = np.arange(self.sr, dtype=np.float32) / self.sr
+        # A vowel-ish tone with harmonics stands in for speech.
+        self.audio = (0.5 * np.sin(2 * np.pi * 180 * t)
+                      + 0.3 * np.sin(2 * np.pi * 540 * t)).astype(np.float32)
+
+    def test_output_stays_within_range(self):
+        for name, profile in PROFILES.items():
+            out = apply_vox(self.audio, self.sr, profile)
+            self.assertLessEqual(float(np.abs(out).max()), 1.0, name)
+
+    def test_output_is_never_silent(self):
+        for name, profile in PROFILES.items():
+            out = apply_vox(self.audio, self.sr, profile)
+            self.assertGreater(float(np.abs(out).mean()), 0.001, name)
+
+    def test_empty_audio_survives(self):
+        self.assertEqual(apply_vox(np.zeros(0, dtype=np.float32), self.sr).size, 0)
+
+    def test_speech_band_is_preserved(self):
+        """Intelligibility check: energy must remain where consonants live."""
+        out = apply_vox(self.audio, self.sr, PROFILES["heavy"])
+        spectrum = np.abs(np.fft.rfft(out))
+        freqs = np.fft.rfftfreq(len(out), 1 / self.sr)
+        band = spectrum[(freqs >= 300) & (freqs <= 3400)].sum()
+        self.assertGreater(band / spectrum.sum(), 0.30)
+
+    def test_intensity_zero_leaves_the_voice_recognisable(self):
+        out = apply_vox(self.audio, self.sr, PROFILES["off"])
+        self.assertEqual(len(out), len(self.audio))
+
+    def test_heavier_profiles_lower_the_pitch(self):
+        self.assertLess(PROFILES["heavy"].pitch_ratio, PROFILES["magos"].pitch_ratio)
+        self.assertLess(PROFILES["magos"].pitch_ratio, PROFILES["subtle"].pitch_ratio)
+
+    def test_intensity_is_clamped_not_trusted(self):
+        out = apply_vox(self.audio, self.sr, VoxProfile(intensity=9.0))
+        self.assertLessEqual(float(np.abs(out).max()), 1.0)
+
+
+class VoiceRoutingTests(unittest.TestCase):
+    def test_the_default_profile_is_the_one_vitor_chose(self):
+        with _env():
+            self.assertEqual(EarConfig.from_env().vox_profile, "heavy")
+
+    def test_language_selects_a_matching_voice(self):
+        from ear.speak import KokoroVoice
+
+        voice = KokoroVoice(Path("/nope"), Path("/nope"), Path("/nope"))
+        self.assertEqual(voice._for_language("pt")[0], "pf_dora")
+        self.assertEqual(voice._for_language("en")[0], "af_heart")
+
+    def test_unknown_language_falls_back_to_the_default_voice(self):
+        from ear.speak import KokoroVoice
+
+        voice = KokoroVoice(Path("/nope"), Path("/nope"), Path("/nope"), voice="am_onyx")
+        self.assertEqual(voice._for_language("kl")[0], "am_onyx")
+        self.assertEqual(voice._for_language(None)[0], "am_onyx")
+
+
+class TranscriptTests(unittest.TestCase):
+    def test_empty_transcript_is_falsey(self):
+        self.assertFalse(Transcript(""))
+        self.assertTrue(Transcript("hello"))
+
+    def test_language_defaults_to_english(self):
+        self.assertEqual(Transcript("hi").language, "en")
 
 
 class DeviceGuardTests(unittest.TestCase):
