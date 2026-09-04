@@ -132,6 +132,20 @@ scripts/servitor-ear stream    # what the widget reads
 | Qwen reply | NPU | 2.4 – 6.8 s |
 | Qwen reply | GPU | 0.15 – 1.1 s |
 
-The GPU is much faster but raised `CL_OUT_OF_RESOURCES` partway through a run
-with 8 GB of desktop applications resident; the iGPU has no memory of its own.
-Set `EAR_LLM_DEVICE=GPU` when the machine is quiet.
+The GPU is much faster and must not be used anyway. This machine has one
+integrated GPU, and the compositor draws on it while voxtype runs its Whisper
+on it through Vulkan. Adding a 1.5B model on top raised `CL_OUT_OF_RESOURCES`
+and then hung the device outright:
+
+```
+i915 0000:00:02.0: [drm] GPU HANG: ecode 12:10:cd64c000, in python [611668]
+i915 0000:00:02.0: [drm] python[611668] context reset due to GPU hang
+```
+
+The desktop survived the reset but stayed degraded until the session was
+restarted. The NPU is a separate engine and contends with neither the
+compositor nor voxtype, which is the real reason both models default to it —
+the memory headroom is a bonus, not the point.
+
+`EAR_LLM_DEVICE=GPU` exists for a machine whose GPU is not also driving a
+display. On this one, leave it alone.
