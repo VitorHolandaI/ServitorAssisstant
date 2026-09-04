@@ -65,7 +65,7 @@ BarWidget {
 
   Timer {
     id: reconnect
-    interval: 2000
+    interval: 4000
     repeat: false
     onTriggered: { root.state = "off"; root.enabled = false; watcher.running = true }
   }

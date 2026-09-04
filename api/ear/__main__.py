@@ -13,11 +13,16 @@ import logging
 import signal
 import threading
 
-from ear import assistant, control
-from ear.ear import EarConfig, ServitorEar
+from ear import control
 
 
 def _daemon() -> int:
+    # Imported here, not at module scope: the widget re-runs this CLI to
+    # reconnect whenever the daemon is down, and `status`/`toggle`/`stream`
+    # have no business loading numpy and the model wrappers to print a line.
+    from ear import assistant
+    from ear.ear import EarConfig, ServitorEar
+
     config = EarConfig.from_env()
     responder = assistant.build(config)
     ear = ServitorEar(config, responder=responder)
