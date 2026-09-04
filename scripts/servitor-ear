@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Thin launcher so the systemd unit and the bar widget do not need to know
+# where the checkout or its virtualenv live.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+PY="$ROOT_DIR/.venv/bin/python"
+[ -x "$PY" ] || PY="python3"
+
+export PYTHONPATH="$ROOT_DIR/api${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m ear "$@"

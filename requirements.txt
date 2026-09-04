@@ -21,6 +21,9 @@ soundfile==0.13.1
 playsound3==3.3.0
 sox==1.5.0
 
+# Local inference on Intel NPU/GPU (api/ear)
+openvino-genai
+
 # Speech recognition
 speechrecognition==3.14.4
 pyaudio==0.2.14

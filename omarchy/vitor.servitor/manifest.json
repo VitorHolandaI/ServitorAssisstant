@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "vitor.servitor",
+  "name": "Servitor Ear",
+  "version": "0.1.0",
+  "author": "Vitor",
+  "description": "Wake-word listener toggle",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Servitor Ear",
+    "description": "Shows and toggles the always-on wake-word listener",
+    "category": "System",
+    "allowMultiple": false
+  }
+}

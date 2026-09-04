@@ -1,0 +1,16 @@
+[Unit]
+Description=Servitor wake-word listener
+Documentation=file://@ROOT_DIR@/api/ear/ear.py
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=@ROOT_DIR@/scripts/servitor-ear daemon
+Restart=on-failure
+RestartSec=3
+# The listener holds the microphone open; keep it out of the way of the rest
+# of the desktop rather than letting it compete for CPU with foreground work.
+Nice=5
+
+[Install]
+WantedBy=default.target
