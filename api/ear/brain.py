@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from ear.devices import guard_device
+
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
@@ -33,7 +35,7 @@ class LocalBrain:
         history_turns: int = 6,
     ):
         self.model_dir = Path(model_dir)
-        self.device = device
+        self.device = guard_device(device, "the language model")
         self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "servitor" / "ov-cache"
         self.max_new_tokens = max_new_tokens
         self.history_turns = history_turns

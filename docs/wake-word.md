@@ -32,6 +32,32 @@ Qwen2.5 1.5B int4                                  NPU
 Piper speaks the reply                             CPU
 ```
 
+## Two gates, cheapest first
+
+Commercial wake-word stacks are staged: a small always-on detector on the
+device, and a larger verifier that only runs on what the first stage passed.
+The reason given is the one that applies here too — conserving compute and
+limiting unintended activations. This has the same shape, one step smaller:
+
+| stage | runs | cost |
+|---|---|---|
+| energy gate | always | arithmetic on 100 ms of samples |
+| Vosk, grammar-restricted | only while there is sound | 0.018 realtime |
+| Whisper | once per wake | ~0.3 s |
+| the model | once per wake | seconds |
+
+Measured over a synthetic quiet minute with one wake phrase in it:
+
+| | realtime factor | blocks decoded | wake detected |
+|---|---|---|---|
+| gate off | 0.0155 | 568/568 | yes |
+| gate on | **0.0005** | **19/568** | yes |
+
+A real room is noisier than synthetic room tone and will open the gate more
+often, so treat 31x as the ceiling rather than the expectation. The gate keeps
+a 0.4 s pre-roll and replays it into the decoder when it opens, otherwise the
+first syllable of the phrase is lost. `EAR_VAD=false` turns it off.
+
 ## Why the wake gate is Vosk and not Whisper
 
 The gate runs continuously, so its cost is paid all day. A Vosk recognizer
@@ -148,4 +174,8 @@ compositor nor voxtype, which is the real reason both models default to it —
 the memory headroom is a bonus, not the point.
 
 `EAR_LLM_DEVICE=GPU` exists for a machine whose GPU is not also driving a
-display. On this one, leave it alone.
+display. On this one, leave it alone — and the code now enforces that rather
+than trusting the note: `api/ear/devices.py` reads the DRM connector states
+and refuses the GPU whenever one reports `connected`, falling back to the NPU
+and saying so. `EAR_ALLOW_SHARED_GPU=true` overrides it for someone who
+means it.

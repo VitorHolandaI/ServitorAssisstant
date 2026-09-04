@@ -14,6 +14,7 @@ import os
 import threading
 import time
 import wave
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from io import BytesIO
@@ -64,6 +65,15 @@ class EarConfig:
     speech_onset_seconds: float = 0.2
     # Silence after playback before we trust the microphone again.
     settle_seconds: float = 0.4
+    # Stage zero: only run the decoder while there is sound worth decoding.
+    # Commercial wake-word stacks are built the same way round — the cheapest
+    # thing runs always, and wakes the next stage up.
+    vad_enabled: bool = True
+    # Audio kept from before speech was detected, so the decoder still hears
+    # the first syllable of the phrase rather than starting mid-word.
+    vad_preroll_seconds: float = 0.4
+    # How long to keep decoding after the room goes quiet again.
+    vad_hangover_seconds: float = 0.8
     start_enabled: bool = True
 
     @classmethod
@@ -94,8 +104,47 @@ class EarConfig:
             lead_in_seconds=float(str_env("EAR_LEAD_IN_SECONDS", str(defaults.lead_in_seconds))),
             speech_onset_seconds=float(str_env("EAR_SPEECH_ONSET_SECONDS", str(defaults.speech_onset_seconds))),
             settle_seconds=float(str_env("EAR_SETTLE_SECONDS", str(defaults.settle_seconds))),
+            vad_enabled=str_env("EAR_VAD", "true").lower() != "false",
+            vad_preroll_seconds=float(str_env("EAR_VAD_PREROLL_SECONDS", str(defaults.vad_preroll_seconds))),
+            vad_hangover_seconds=float(str_env("EAR_VAD_HANGOVER_SECONDS", str(defaults.vad_hangover_seconds))),
             start_enabled=os.getenv("EAR_START_ENABLED", "true").lower() != "false",
         )
+
+
+class _EnergyGate:
+    """Stage zero: decide whether the decoder gets to see this block at all.
+
+    Keeps a short pre-roll so that when it does open, the decoder still hears
+    the run-up to the phrase instead of starting mid-word.
+    """
+
+    def __init__(self, preroll_blocks: int, hangover_blocks: int):
+        self._preroll: deque[bytes] = deque(maxlen=max(1, preroll_blocks))
+        self._hangover = max(1, hangover_blocks)
+        self._quiet = self._hangover  # start closed
+        self.just_closed = False
+
+    @property
+    def open(self) -> bool:
+        return self._quiet < self._hangover
+
+    def feed(self, block: bytes, loud: bool) -> list[bytes]:
+        """Blocks the decoder should consume now; empty means stay asleep."""
+        self._quiet = 0 if loud else self._quiet + 1
+        self.just_closed = self._quiet == self._hangover
+        if not self.open:
+            self._preroll.append(block)
+            return []
+        if self._preroll:
+            replay = [*self._preroll, block]
+            self._preroll.clear()
+            return replay
+        return [block]
+
+    def reset(self) -> None:
+        self._preroll.clear()
+        self._quiet = self._hangover
+        self.just_closed = False
 
 
 def _rms(block: bytes) -> float:
@@ -230,6 +279,16 @@ class ServitorEar:
         grammar = json.dumps([self.config.wake_phrase, "[unk]"])
         recognizer = KaldiRecognizer(model, SAMPLE_RATE, grammar)
 
+        blocks_per_second = SAMPLE_RATE / BLOCK_FRAMES
+        gate = (
+            _EnergyGate(
+                int(self.config.vad_preroll_seconds * blocks_per_second),
+                int(self.config.vad_hangover_seconds * blocks_per_second),
+            )
+            if self.config.vad_enabled
+            else None
+        )
+
         with sd.RawInputStream(
             samplerate=SAMPLE_RATE,
             blocksize=BLOCK_FRAMES,
@@ -242,15 +301,36 @@ class ServitorEar:
                 block = bytes(block)
                 self._track_noise_floor(block)
 
-                if recognizer.AcceptWaveform(block):
-                    heard = json.loads(recognizer.Result()).get("text", "")
-                else:
-                    heard = json.loads(recognizer.PartialResult()).get("partial", "")
+                chunks = [block]
+                if gate is not None:
+                    chunks = gate.feed(block, _rms(block) >= self._speech_threshold())
+                    if gate.just_closed:
+                        # Room went quiet: drop any half-formed hypothesis.
+                        recognizer.Reset()
+                    if not chunks:
+                        continue
 
-                if self.config.wake_phrase in heard:
+                if self._decode_for_wake(recognizer, chunks):
                     recognizer.Reset()
+                    if gate is not None:
+                        gate.reset()
                     self._handle_wake(stream)
                     self._set_state(LISTENING)
+
+    def _decode_for_wake(self, recognizer, chunks: list[bytes]) -> bool:
+        """Feed audio to the decoder, reporting whether the phrase appeared."""
+        for chunk in chunks:
+            if recognizer.AcceptWaveform(chunk):
+                heard = json.loads(recognizer.Result()).get("text", "")
+            else:
+                heard = json.loads(recognizer.PartialResult()).get("partial", "")
+            if self.config.wake_phrase in heard:
+                return True
+        return False
+
+    def _speech_threshold(self) -> float:
+        """Level a block must reach to count as someone talking."""
+        return max(self._noise_floor * 3.0, 300.0)
 
     def _track_noise_floor(self, block: bytes) -> None:
         """Follow the room's quiet level so the silence threshold adapts to it."""
@@ -311,7 +391,7 @@ class ServitorEar:
         it to end. Collapsing them into a single silence counter is what made
         an earlier version close the recording before the user had started.
         """
-        threshold = max(self._noise_floor * 3.0, 300.0)
+        threshold = self._speech_threshold()
         blocks_per_second = SAMPLE_RATE / BLOCK_FRAMES
         silence_blocks = int(self.config.silence_seconds * blocks_per_second)
         lead_in_blocks = int(self.config.lead_in_seconds * blocks_per_second)

@@ -24,6 +24,7 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
+from ear.devices import guard_device
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class OpenVinoWhisper:
 
     def __init__(self, model_dir: Path, device: str = "NPU", cache_dir: Path | None = None):
         self.model_dir = Path(model_dir)
-        self.device = device
+        self.device = guard_device(device, "Whisper")
         self.cache_dir = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "servitor" / "ov-cache"
         if not self.model_dir.is_dir():
             raise FileNotFoundError(f"Whisper model not found: {self.model_dir}")

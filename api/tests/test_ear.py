@@ -22,12 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ear import control  # noqa: E402
 from ear.ear import (  # noqa: E402
     LISTENING,
+    _EnergyGate,
     OFF,
     EarConfig,
     ServitorEar,
     _rms,
     _to_wav,
 )
+from ear.devices import connected_displays, guard_device  # noqa: E402
 from ear.transcribe import wav_to_float32  # noqa: E402
 
 EAR_ENV = {
@@ -41,6 +43,8 @@ EAR_ENV = {
     "EAR_LLM_DEVICE": "",
     "EAR_SPOOL_DIR": "",
     "EAR_START_ENABLED": "",
+    "EAR_VAD": "",
+    "EAR_ALLOW_SHARED_GPU": "",
 }
 
 
@@ -76,6 +80,123 @@ class EarConfigTests(unittest.TestCase):
             self.assertFalse(EarConfig.from_env().start_enabled)
         with _env(EAR_START_ENABLED="true"):
             self.assertTrue(EarConfig.from_env().start_enabled)
+
+
+class DeviceGuardTests(unittest.TestCase):
+    """The GPU also drives the desktop; a model hung it once already."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.drm = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _connector(self, name, status):
+        card = self.drm / "card1" / name
+        card.mkdir(parents=True)
+        (card / "status").write_text(status + "\n", encoding="utf-8")
+
+    def test_npu_and_cpu_pass_through_untouched(self):
+        self._connector("card1-eDP-1", "connected")
+        with _env():
+            self.assertEqual(guard_device("NPU", "x", self.drm), "NPU")
+            self.assertEqual(guard_device("CPU", "x", self.drm), "CPU")
+
+    def test_gpu_is_refused_while_a_display_is_attached(self):
+        self._connector("card1-eDP-1", "connected")
+        with _env():
+            self.assertEqual(guard_device("GPU", "x", self.drm), "NPU")
+
+    def test_gpu_is_allowed_when_nothing_is_plugged_in(self):
+        self._connector("card1-HDMI-A-1", "disconnected")
+        with _env():
+            self.assertEqual(guard_device("GPU", "x", self.drm), "GPU")
+
+    def test_the_override_is_honoured(self):
+        self._connector("card1-eDP-1", "connected")
+        with _env(EAR_ALLOW_SHARED_GPU="true"):
+            self.assertEqual(guard_device("GPU", "x", self.drm), "GPU")
+
+    def test_lowercase_device_is_still_guarded(self):
+        self._connector("card1-eDP-1", "connected")
+        with _env():
+            self.assertEqual(guard_device("gpu", "x", self.drm), "NPU")
+
+    def test_missing_drm_tree_is_not_an_error(self):
+        self.assertEqual(connected_displays(self.drm / "nope"), [])
+
+    def test_only_connected_connectors_are_reported(self):
+        self._connector("card1-eDP-1", "connected")
+        self._connector("card1-DP-2", "disconnected")
+        self.assertEqual(connected_displays(self.drm), ["card1-eDP-1"])
+
+
+class EnergyGateTests(unittest.TestCase):
+    """Stage zero. Wrong here means either a deaf ear or a wasted core."""
+
+    def setUp(self):
+        self.gate = _EnergyGate(preroll_blocks=3, hangover_blocks=4)
+
+    def test_starts_closed_so_a_quiet_room_costs_nothing(self):
+        self.assertEqual(self.gate.feed(b"q", loud=False), [])
+        self.assertFalse(self.gate.open)
+
+    def test_opens_on_sound(self):
+        self.assertTrue(self.gate.feed(b"loud", loud=True))
+        self.assertTrue(self.gate.open)
+
+    def test_replays_the_preroll_so_the_first_syllable_survives(self):
+        for name in (b"q1", b"q2", b"q3"):
+            self.gate.feed(name, loud=False)
+        out = self.gate.feed(b"speech", loud=True)
+        self.assertEqual(out, [b"q1", b"q2", b"q3", b"speech"])
+
+    def test_preroll_keeps_only_the_most_recent_blocks(self):
+        for name in (b"q1", b"q2", b"q3", b"q4", b"q5"):
+            self.gate.feed(name, loud=False)
+        self.assertEqual(self.gate.feed(b"speech", loud=True), [b"q3", b"q4", b"q5", b"speech"])
+
+    def test_stays_open_through_a_pause_between_words(self):
+        self.gate.feed(b"a", loud=True)
+        for _ in range(3):  # shorter than the 4-block hangover
+            self.assertTrue(self.gate.feed(b"gap", loud=False))
+        self.assertTrue(self.gate.open)
+
+    def test_closes_after_the_hangover_expires(self):
+        self.gate.feed(b"a", loud=True)
+        for _ in range(4):
+            self.gate.feed(b"gap", loud=False)
+        self.assertFalse(self.gate.open)
+        self.assertEqual(self.gate.feed(b"more", loud=False), [])
+
+    def test_reports_the_exact_block_it_closed_on(self):
+        """The decoder is reset once, on that edge — not on every quiet block."""
+        self.gate.feed(b"a", loud=True)
+        closings = [bool(self.gate.feed(b"q", loud=False) is not None and self.gate.just_closed)
+                    for _ in range(8)]
+        self.assertEqual(closings.count(True), 1)
+
+    def test_reset_closes_it_and_drops_the_preroll(self):
+        self.gate.feed(b"a", loud=True)
+        self.gate.feed(b"q", loud=False)
+        self.gate.reset()
+        self.assertFalse(self.gate.open)
+        self.assertEqual(self.gate.feed(b"q2", loud=False), [])
+
+
+class VadConfigTests(unittest.TestCase):
+    def test_the_gate_is_on_by_default(self):
+        with _env():
+            self.assertTrue(EarConfig.from_env().vad_enabled)
+
+    def test_the_gate_can_be_turned_off(self):
+        with _env(EAR_VAD="false"):
+            self.assertFalse(EarConfig.from_env().vad_enabled)
+
+    def test_preroll_exists_so_the_first_syllable_is_not_clipped(self):
+        with _env():
+            self.assertGreater(EarConfig.from_env().vad_preroll_seconds, 0.0)
 
 
 class AudioHelperTests(unittest.TestCase):
