@@ -185,6 +185,13 @@ class EnergyGateTests(unittest.TestCase):
         self.assertEqual(self.gate.feed(b"q2", loud=False), [])
 
 
+class DotenvTests(unittest.TestCase):
+    def test_the_daemon_reads_the_projects_env_file(self):
+        """Every EAR_* line in .env.example is a lie unless this holds."""
+        source = (Path(__file__).resolve().parents[1] / "ear" / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn("load_dotenv", source)
+
+
 class VadConfigTests(unittest.TestCase):
     def test_the_gate_is_on_by_default(self):
         with _env():

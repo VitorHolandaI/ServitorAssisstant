@@ -20,9 +20,15 @@ def _daemon() -> int:
     # Imported here, not at module scope: the widget re-runs this CLI to
     # reconnect whenever the daemon is down, and `status`/`toggle`/`stream`
     # have no business loading numpy and the model wrappers to print a line.
-    from ear import assistant
-    from ear.ear import EarConfig, ServitorEar
+    from dotenv import load_dotenv
 
+    from ear import assistant
+    from ear.ear import REPO_ROOT, EarConfig, ServitorEar
+
+    # Same .env the rest of the project reads. Without this every EAR_* line
+    # documented in .env.example would be silently ignored. load_dotenv does
+    # not override what is already set, so a systemd Environment= still wins.
+    load_dotenv(REPO_ROOT / ".env")
     config = EarConfig.from_env()
     responder = assistant.build(config)
     ear = ServitorEar(config, responder=responder)
