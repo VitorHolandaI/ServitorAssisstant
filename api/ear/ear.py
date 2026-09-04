@@ -54,6 +54,16 @@ class EarConfig:
     silence_seconds: float = 1.2
     max_command_seconds: float = 15.0
     min_command_seconds: float = 0.4
+    # How long to wait for you to start talking after the acknowledgement.
+    # A person needs about a second; the old behaviour started counting
+    # silence immediately and closed the recording before they began.
+    lead_in_seconds: float = 5.0
+    # Speech has to persist for this long to count as speech at all, so the
+    # tail of our own acknowledgement leaking back into the microphone does
+    # not open and then immediately close a recording.
+    speech_onset_seconds: float = 0.2
+    # Silence after playback before we trust the microphone again.
+    settle_seconds: float = 0.4
     start_enabled: bool = True
 
     @classmethod
@@ -81,6 +91,9 @@ class EarConfig:
             silence_seconds=float(str_env("EAR_SILENCE_SECONDS", str(defaults.silence_seconds))),
             max_command_seconds=float(str_env("EAR_MAX_COMMAND_SECONDS", str(defaults.max_command_seconds))),
             min_command_seconds=float(str_env("EAR_MIN_COMMAND_SECONDS", str(defaults.min_command_seconds))),
+            lead_in_seconds=float(str_env("EAR_LEAD_IN_SECONDS", str(defaults.lead_in_seconds))),
+            speech_onset_seconds=float(str_env("EAR_SPEECH_ONSET_SECONDS", str(defaults.speech_onset_seconds))),
+            settle_seconds=float(str_env("EAR_SETTLE_SECONDS", str(defaults.settle_seconds))),
             start_enabled=os.getenv("EAR_START_ENABLED", "true").lower() != "false",
         )
 
@@ -252,8 +265,7 @@ class ServitorEar:
         logger.info(f"[Ear] wake phrase heard: {self.config.wake_phrase!r}")
         self._set_state(AWAKE)
         self._speak_wav(self._ack_audio())
-
-        stream.read(stream.read_available or 1)  # drop what the speaker leaked in
+        self._drain(stream)
 
         self._set_state(RECORDING)
         command = self._record_command(stream)
@@ -278,33 +290,66 @@ class ServitorEar:
         if reply:
             self._speak_text(reply)
 
+    def _drain(self, stream) -> None:
+        """Throw away everything the microphone heard while we were talking.
+
+        The speaker feeds back into the microphone, so without this the
+        acknowledgement is itself recorded and transcribed. Measured once as a
+        command of "Thank you." that the user never said.
+        """
+        time.sleep(self.config.settle_seconds)
+        for _ in range(100):  # bounded; a stuck stream must not hang the ear
+            available = getattr(stream, "read_available", 0)
+            if available < BLOCK_FRAMES:
+                break
+            stream.read(BLOCK_FRAMES)
+
     def _record_command(self, stream) -> bytes | None:
-        """Record until the speaker stops, capped by `max_command_seconds`."""
+        """Record until the speaker stops, capped by `max_command_seconds`.
+
+        Two clocks run here: one waiting for speech to begin, one waiting for
+        it to end. Collapsing them into a single silence counter is what made
+        an earlier version close the recording before the user had started.
+        """
         threshold = max(self._noise_floor * 3.0, 300.0)
-        silence_blocks = int(self.config.silence_seconds * SAMPLE_RATE / BLOCK_FRAMES)
-        max_blocks = int(self.config.max_command_seconds * SAMPLE_RATE / BLOCK_FRAMES)
+        blocks_per_second = SAMPLE_RATE / BLOCK_FRAMES
+        silence_blocks = int(self.config.silence_seconds * blocks_per_second)
+        lead_in_blocks = int(self.config.lead_in_seconds * blocks_per_second)
+        onset_blocks = max(1, int(self.config.speech_onset_seconds * blocks_per_second))
+        max_blocks = int(self.config.max_command_seconds * blocks_per_second)
 
         frames: list[bytes] = []
+        loud_run = 0
         quiet_run = 0
         heard_speech = False
+        waited = 0
 
         for _ in range(max_blocks):
             if not self._enabled.is_set() or self._stop.is_set():
                 break
             block, _ = stream.read(BLOCK_FRAMES)
             block = bytes(block)
-            frames.append(block)
+            loud = _rms(block) >= threshold
 
-            if _rms(block) >= threshold:
-                heard_speech = True
+            if not heard_speech:
+                waited += 1
+                loud_run = loud_run + 1 if loud else 0
+                if loud_run >= onset_blocks:
+                    heard_speech = True
+                    quiet_run = 0
+                elif waited >= lead_in_blocks:
+                    return None  # nothing followed the wake phrase
+                # Keep the run-up so the first syllable is not clipped.
+                frames.append(block)
+                continue
+
+            frames.append(block)
+            if loud:
                 quiet_run = 0
             else:
                 quiet_run += 1
-                # Give the user a moment to start before counting silence.
-                if heard_speech and quiet_run >= silence_blocks:
+                if quiet_run >= silence_blocks:
                     break
-                if not heard_speech and quiet_run >= silence_blocks * 2:
-                    return None
 
         if not heard_speech:
             return None
