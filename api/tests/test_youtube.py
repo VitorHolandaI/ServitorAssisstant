@@ -11,7 +11,14 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mcp_module.youtube import channels  # noqa: E402
-from mcp_module.youtube.stream import Video, _ago, _parse, _speak  # noqa: E402
+from mcp_module.youtube.stream import (  # noqa: E402
+    Video,
+    _ago,
+    _parse,
+    _recent,
+    _speak,
+    _window_label,
+)
 
 FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
@@ -128,3 +135,27 @@ class ChannelStoreTests(unittest.TestCase):
         self.path.write_text("channel_id,title\nnot-a-channel,Nope\n"
                              "UC9-y-6csu5WGm29I7JiwpnA,Computerphile\n", encoding="utf-8")
         self.assertEqual(channels.load(), [("UC9-y-6csu5WGm29I7JiwpnA", "Computerphile")])
+
+
+class RecencyWindowTests(unittest.TestCase):
+    """364 subscriptions carry thousands of entries; a day is what "new" means."""
+
+    def _video(self, hours_old):
+        return Video("Title", "Channel", "x" * 11,
+                     dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_old))
+
+    def test_only_videos_inside_the_window_survive(self):
+        videos = [self._video(1), self._video(10), self._video(30)]
+        self.assertEqual(len(_recent(videos, 24)), 2)
+
+    def test_a_wider_window_takes_more(self):
+        videos = [self._video(1), self._video(30), self._video(200)]
+        self.assertEqual(len(_recent(videos, 168)), 2)
+
+    def test_an_empty_window_is_empty_not_everything(self):
+        self.assertEqual(_recent([self._video(100)], 24), [])
+
+    def test_the_window_is_described_in_words_not_hours(self):
+        self.assertEqual(_window_label(24), "today")
+        self.assertEqual(_window_label(48), "in the last two days")
+        self.assertEqual(_window_label(168), "in the last 7 days")

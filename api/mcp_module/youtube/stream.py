@@ -38,6 +38,12 @@ PAGE_SIZE = int(os.getenv("YOUTUBE_PAGE_SIZE", "3"))
 # Feeds are refetched at most this often: a subscription feed does not change
 # between "read me the next three" and the three after that.
 CACHE_SECONDS = float(os.getenv("YOUTUBE_CACHE_SECONDS", "600"))
+# What "new" means. 364 channels carry roughly 5000 entries between them, and
+# paging through those three at a time never ends. The subscriptions page
+# answers "what appeared recently", so this does too.
+DEFAULT_AGE_HOURS = float(os.getenv("YOUTUBE_MAX_AGE_HOURS", "24"))
+# When a day is empty, widening once beats saying nothing at all.
+FALLBACK_AGE_HOURS = float(os.getenv("YOUTUBE_FALLBACK_AGE_HOURS", "168"))
 
 mcp = FastMCP("YouTube", host=MCP_HOST, port=MCP_PORT, stateless_http=True)
 
@@ -62,6 +68,8 @@ class _Feed:
         self.fetched_at = 0.0
         self.cursor = 0
         self.offered: list[Video] = []
+        self.window: list[Video] = []
+        self.window_hours = 0.0
 
 
 _state = _Feed()
@@ -192,7 +200,20 @@ def _speak(batch: list[Video], start: int) -> str:
     return " ".join(lines)
 
 
-async def _page(reset: bool) -> str:
+def _recent(videos: list[Video], hours: float) -> list[Video]:
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
+    return [video for video in videos if video.published >= cutoff]
+
+
+def _window_label(hours: float) -> str:
+    if hours <= 24:
+        return "today"
+    if hours <= 48:
+        return "in the last two days"
+    return f"in the last {int(hours // 24)} days"
+
+
+async def _page(reset: bool, hours: float | None = None) -> str:
     videos = await _videos()
     if not videos:
         return (
@@ -201,27 +222,46 @@ async def _page(reset: bool) -> str:
         )
     if reset:
         _state.cursor = 0
-    batch = videos[_state.cursor:_state.cursor + PAGE_SIZE]
+        wanted = DEFAULT_AGE_HOURS if hours is None else max(1.0, float(hours))
+        window = _recent(videos, wanted)
+        if not window and hours is None:
+            # A quiet day is not an error, but neither is silence an answer.
+            wanted = FALLBACK_AGE_HOURS
+            window = _recent(videos, wanted)
+        _state.window = window
+        _state.window_hours = wanted
+        if not window:
+            return f"Nothing new {_window_label(wanted)}."
+
+    window = _state.window or videos
+    batch = window[_state.cursor:_state.cursor + PAGE_SIZE]
     if not batch:
         _state.cursor = 0
-        return "That is the end of the list."
+        return f"That is everything from {_window_label(_state.window_hours)}."
     start = _state.cursor
     _state.cursor += len(batch)
     _state.offered = batch
-    remaining = len(videos) - _state.cursor
+    remaining = len(window) - _state.cursor
     tail = " Say which one to play, or ask for more." if remaining > 0 else " Say which one to play."
-    return _speak(batch, start) + tail
+    head = ""
+    if start == 0:
+        head = f"{len(window)} new {'video' if len(window) == 1 else 'videos'} {_window_label(_state.window_hours)}. "
+    return head + _speak(batch, start) + tail
 
 
 @mcp.tool()
-async def list_new_videos() -> str:
+async def list_new_videos(since_hours: float = 0) -> str:
     """The newest videos from the channels the user follows, three at a time.
+
+    Covers the last day by default, like the subscriptions page - not the
+    whole backlog. `since_hours` widens it when the user asks for a longer
+    stretch: "this week" is 168.
 
     Use when asked what is new, what to watch, or for their subscriptions.
     Read the result out as it is and then stop: the user chooses one, asks
     for more, or says nothing.
     """
-    return await _page(reset=True)
+    return await _page(reset=True, hours=since_hours or None)
 
 
 @mcp.tool()
