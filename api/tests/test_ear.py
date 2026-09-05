@@ -11,6 +11,7 @@ import sys
 import threading
 import unittest
 import wave
+from unittest import mock
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -29,7 +30,13 @@ from ear.ear import (  # noqa: E402
     _rms,
     _to_wav,
 )
-from ear.devices import connected_displays, guard_device  # noqa: E402
+from ear.brain import LocalBrain  # noqa: E402
+from ear.devices import (  # noqa: E402
+    connected_displays,
+    fits_on_shared_gpu,
+    guard_device,
+    model_weight_bytes,
+)
 from ear.transcribe import Transcript, wav_to_float32  # noqa: E402
 from ear.voice_fx import PROFILES, VoxProfile, apply_vox  # noqa: E402
 
@@ -469,3 +476,113 @@ class ControlSocketTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GpuSizeGuardTests(unittest.TestCase):
+    """The GPU is shared with the compositor, so only a small model may use it.
+
+    Measured on this machine: the driver reports a 4.00 GiB single-allocation
+    ceiling, qwen3-4b weighs 2.27 GB and runs, qwen3-8b weighs 4.75 GB and the
+    session took an i915 GPU HANG.
+    """
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.drm = self.root / "drm"
+        (self.drm / "card1" / "card1-eDP-1").mkdir(parents=True)
+        (self.drm / "card1" / "card1-eDP-1" / "status").write_text("connected\n", encoding="utf-8")
+
+    def _model(self, name: str, size: int) -> Path:
+        model = self.root / name
+        model.mkdir()
+        (model / "openvino_model.bin").write_bytes(b"\0" * size)
+        return model
+
+    def test_weights_are_measured_from_the_bin_files(self):
+        model = self._model("small", 1024)
+        self.assertEqual(model_weight_bytes(model), 1024)
+
+    def test_a_missing_directory_weighs_nothing(self):
+        self.assertEqual(model_weight_bytes(self.root / "nope"), 0)
+
+    def test_an_unsized_model_is_refused(self):
+        fits, detail = fits_on_shared_gpu(None)
+        self.assertFalse(fits)
+        self.assertIn("no model directory", detail)
+
+    def test_a_model_under_the_ceiling_keeps_the_gpu(self):
+        model = self._model("small", 2048)
+        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=100_000):
+            self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "GPU")
+
+    def test_a_model_over_the_ceiling_is_sent_to_the_npu(self):
+        model = self._model("big", 90_000)
+        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=100_000):
+            self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "NPU")
+
+    def test_an_unreadable_ceiling_is_not_treated_as_unlimited(self):
+        model = self._model("small", 8)
+        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=0):
+            self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "NPU")
+
+
+class ThinkingBlockTests(unittest.TestCase):
+    """Qwen3 wraps its reasoning in literal <think> tags, per chat_template.jinja."""
+
+    def test_the_answer_after_the_block_is_kept(self):
+        self.assertEqual(
+            LocalBrain._strip_thinking("<think>\nwhy\n</think>\n\nIt is six."), "It is six."
+        )
+
+    def test_a_plain_multi_line_answer_survives_intact(self):
+        text = "The server is up.\nIt has run for three days."
+        self.assertEqual(LocalBrain._strip_thinking(text), text)
+
+    def test_an_unterminated_block_speaks_nothing(self):
+        self.assertEqual(LocalBrain._strip_thinking("<think>\nstill reasoning"), "")
+
+    def test_the_word_thinking_in_an_answer_is_not_a_marker(self):
+        text = "I am thinking\nabout your request."
+        self.assertEqual(LocalBrain._strip_thinking(text), text)
+
+
+class IdleUnloadTests(unittest.TestCase):
+    """The model is kept for a conversation and dropped after it, not per turn."""
+
+    def _brain(self):
+        brain = LocalBrain.__new__(LocalBrain)
+        brain.model_dir = Path("model")
+        brain.device = "GPU"
+        brain._pipeline = object()
+        brain._history = []
+        brain._last_used = 0.0
+        return brain
+
+    def test_nothing_is_dropped_while_the_model_is_still_in_use(self):
+        brain = self._brain()
+        with mock.patch("ear.brain.time.monotonic", return_value=10.0):
+            brain._last_used = 5.0
+            self.assertFalse(brain.unload_if_idle(600.0))
+        self.assertIsNotNone(brain._pipeline)
+
+    def test_the_model_is_dropped_once_the_room_has_been_quiet(self):
+        brain = self._brain()
+        with mock.patch("ear.brain.time.monotonic", return_value=1000.0):
+            brain._last_used = 100.0
+            self.assertTrue(brain.unload_if_idle(600.0))
+        self.assertIsNone(brain._pipeline)
+
+    def test_a_zero_timeout_keeps_the_model_loaded_forever(self):
+        brain = self._brain()
+        with mock.patch("ear.brain.time.monotonic", return_value=1e9):
+            self.assertFalse(brain.unload_if_idle(0.0))
+        self.assertIsNotNone(brain._pipeline)
+
+    def test_unloading_an_already_unloaded_model_is_harmless(self):
+        brain = self._brain()
+        brain._pipeline = None
+        self.assertFalse(brain.unload_if_idle(1.0))

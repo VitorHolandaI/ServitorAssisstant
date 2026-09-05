@@ -62,6 +62,15 @@ class EarConfig:
     whisper_device: str = "NPU"
     llm_model: Path = REPO_ROOT / "voice_models" / "qwen2.5-1.5b-instruct-int4-ov"
     llm_device: str = "NPU"
+    # When set, bypasses the local LLM and calls the server's MCP agent instead.
+    # The server runs the LangGraph ReAct agent with tools (weather, Nextcloud,
+    # Home Assistant, etc). Format: "http://host:port" (default port 8000).
+    server_url: str = ""
+    # How long the room must stay quiet before the language model is dropped
+    # from the accelerator. Measured on qwen3-4b: holding it costs ~975 MB Rss,
+    # rebuilding it from a warm cache costs 3.8 s. Keeping it for the length of
+    # a conversation and freeing it afterwards pays neither on a follow-up.
+    idle_unload_seconds: float = 600.0
     silence_seconds: float = 1.2
     max_command_seconds: float = 15.0
     min_command_seconds: float = 0.4
@@ -95,7 +104,10 @@ class EarConfig:
 
         def path_env(name: str, default: Path) -> Path:
             raw = os.getenv(name, "").strip()
-            return Path(raw).expanduser() if raw else default
+            if not raw:
+                return default
+            p = Path(raw).expanduser()
+            return p if p.is_absolute() else (REPO_ROOT / p).resolve()
 
         defaults = cls()
         return cls(
@@ -112,6 +124,8 @@ class EarConfig:
             whisper_device=str_env("EAR_WHISPER_DEVICE", defaults.whisper_device).upper(),
             llm_model=path_env("EAR_LLM_MODEL", defaults.llm_model),
             llm_device=str_env("EAR_LLM_DEVICE", defaults.llm_device).upper(),
+            server_url=str_env("EAR_SERVER_URL", defaults.server_url),
+            idle_unload_seconds=float(str_env("EAR_IDLE_UNLOAD_SECONDS", str(defaults.idle_unload_seconds))),
             spool_dir=path_env("EAR_SPOOL_DIR", defaults.spool_dir),
             silence_seconds=float(str_env("EAR_SILENCE_SECONDS", str(defaults.silence_seconds))),
             max_command_seconds=float(str_env("EAR_MAX_COMMAND_SECONDS", str(defaults.max_command_seconds))),
@@ -315,6 +329,15 @@ class ServitorEar:
                 block, _ = stream.read(BLOCK_FRAMES)
                 block = bytes(block)
                 self._track_noise_floor(block)
+
+                # Housekeeping runs on this thread, between blocks, so it can
+                # never free a model out from under a generate in progress. It
+                # has to sit above the gate: a quiet room `continue`s past
+                # everything below, and a quiet room is exactly when the
+                # language model should be let go.
+                tick = getattr(self.responder, "tick", None)
+                if tick is not None:
+                    tick()
 
                 chunks = [block]
                 if gate is not None:

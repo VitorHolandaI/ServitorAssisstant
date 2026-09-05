@@ -21,7 +21,6 @@ def _daemon() -> int:
     # reconnect whenever the daemon is down, and `status`/`toggle`/`stream`
     # have no business loading numpy and the model wrappers to print a line.
     from dotenv import load_dotenv
-
     from ear import assistant
     from ear.ear import REPO_ROOT, EarConfig, ServitorEar
 
