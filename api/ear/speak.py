@@ -16,6 +16,7 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
+from ear.spoken_text import to_spoken
 from ear.voice_fx import PROFILES, VoxProfile, apply_vox
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,10 @@ class KokoroVoice:
         return VOICE_BY_LANGUAGE.get(language.lower(), (self.voice, self.lang))
 
     def synthesize(self, text: str, language: str | None = None) -> bytes:
+        # Both engines get spoken text, never markup: a reply that came from
+        # the MCP agent carries bullets and emphasis no matter what the prompt
+        # asked for, and the synthesiser would read them out.
+        text = to_spoken(text)
         voice, lang = self._for_language(language)
         # Lowering the pitch by resampling also lengthens the audio, so ask for
         # speech that much faster and the two cancel out.
@@ -159,6 +164,7 @@ class PiperVoiceFallback:
 
     def synthesize(self, text: str, language: str | None = None) -> bytes:
         # Piper voices are per-file, so the fallback speaks one language only.
+        text = to_spoken(text)
         voice = self._load()
         buffer = BytesIO()
         with wave.open(buffer, "wb") as wav_file:
