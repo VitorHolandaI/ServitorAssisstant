@@ -14,9 +14,22 @@ SYSTEM_PROMPT = (
     "You are the Servitor, a terse voice assistant running locally on Vitor's laptop. "
     "Your reply is going to be spoken aloud, so answer in one or two short sentences. "
     "Never use markdown, bullet points, code blocks or emoji. "
-    "Reply in the same language the user spoke. "
     "If you do not know something, say so plainly instead of inventing it."
 )
+
+
+# Whisper reports a code; the model answers better when told the name.
+LANGUAGE_NAMES = {
+    "en": "English", "pt": "Portuguese", "es": "Spanish", "fr": "French",
+    "it": "Italian", "de": "German", "nl": "Dutch", "ja": "Japanese",
+    "zh": "Chinese", "ko": "Korean", "ru": "Russian", "hi": "Hindi",
+}
+
+
+def language_clause(language: str | None) -> str:
+    """An explicit instruction to answer in one language, or nothing."""
+    name = LANGUAGE_NAMES.get((language or "").strip().lower())
+    return f" Answer in {name}, whatever language these instructions are in." if name else ""
 
 
 class LocalBrain:
@@ -79,19 +92,19 @@ class LocalBrain:
             return ""
         return text.strip()
 
-    def _build_chat(self) -> list[dict]:
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    def _build_chat(self, language: str | None = None) -> list[dict]:
+        messages = [{"role": "system", "content": SYSTEM_PROMPT + language_clause(language)}]
         messages.extend(self._history)
         return messages
 
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, language: str | None = None) -> str:
         """Ask the model, keeping the turn inside its own chat session."""
         import openvino_genai as ov_genai
 
         pipeline = self._ensure()
 
         chat = ov_genai.ChatHistory()
-        for msg in self._build_chat():
+        for msg in self._build_chat(language):
             chat.append(msg)
         chat.append({"role": "user", "content": question})
         # Qwen3 reasons before answering unless the template is told not to.
@@ -160,7 +173,7 @@ class ServerBrain:
     def warm(self) -> None:
         pass
 
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, language: str | None = None) -> str:
         import httpx
 
         logger.info(f"[ServerBrain] asking server: {question[:80]!r}")

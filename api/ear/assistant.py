@@ -83,7 +83,9 @@ class LocalAssistant:
             return None
         if self.on_heard is not None:
             self.on_heard(heard.text)
-        answer = self.brain.answer(heard.text)
+        # Whisper already decided what language this was; telling the model
+        # beats asking it to notice, which it does not reliably do.
+        answer = self.brain.answer(heard.text, heard.language)
         logger.info(f"[Assistant] reply: {answer!r}")
         # Spoken back in the language it was asked in, using the voice that
         # actually belongs to that language.

@@ -24,6 +24,8 @@ import threading
 import time
 from pathlib import Path
 
+from ear.brain import language_clause
+
 logger = logging.getLogger(__name__)
 
 # Spoken, not typed. The tool rules matter more than the prose ones here: a
@@ -33,7 +35,6 @@ SYSTEM_PROMPT = (
     "You are the Servitor, a terse voice assistant running locally on Vitor's laptop. "
     "Your reply is going to be spoken aloud, so answer in one or two short sentences. "
     "Never use markdown, bullet points, code blocks or emoji. "
-    "Reply in the same language the user spoke. "
     "Use a tool whenever one applies, and never say that you will check, fetch or "
     "look something up: by the time you answer the tool has already run, so state "
     "what it returned. "
@@ -118,11 +119,12 @@ class AgentBrain:
             # tries again rather than the daemon refusing to start.
             logger.exception("[Agent] warm failed; will retry on the first command")
 
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, language: str | None = None) -> str:
         client = self._ensure_client()
+        prompt = SYSTEM_PROMPT + language_clause(language)
         try:
             state = self._submit(
-                client.get_response(question, history=None, system_prompt=SYSTEM_PROMPT),
+                client.get_response(question, history=None, system_prompt=prompt),
                 TURN_TIMEOUT,
             )
         except Exception:

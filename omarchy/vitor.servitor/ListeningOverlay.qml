@@ -28,13 +28,15 @@ Item {
   readonly property bool turnActive: earState === "awake" || earState === "recording"
     || earState === "thinking" || earState === "speaking"
 
-  // The card outlives the turn by a moment, so the transcript can be read
-  // after the Servitor stops talking rather than vanishing with the audio.
+  // The card outlives the turn, so the answer can be read after the Servitor
+  // stops talking. A list of videos takes longer to read than a temperature,
+  // so the wait is scaled to how much there is to read rather than fixed.
+  readonly property int lingerMs: Math.min(20000, 4000 + (root.heard.length + root.reply.length) * 45)
   property bool lingering: false
   readonly property bool opened: turnActive || lingering
 
   readonly property int pad: Style.space(16)
-  readonly property int cardWidth: Style.space(420)
+  readonly property int cardWidth: Style.space(560)
 
   readonly property string phase: earState === "awake" ? "Listening"
     : earState === "recording" ? "Listening"
@@ -59,7 +61,7 @@ Item {
 
   Timer {
     id: linger
-    interval: 4000
+    interval: root.lingerMs
     repeat: false
     onTriggered: root.lingering = false
   }
@@ -165,7 +167,7 @@ Item {
           font.family: Style.font.family
           font.pixelSize: Style.font.body
           wrapMode: Text.WordWrap
-          maximumLineCount: 4
+          maximumLineCount: 12
           elide: Text.ElideRight
         }
       }

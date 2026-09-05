@@ -44,6 +44,13 @@ CACHE_SECONDS = float(os.getenv("YOUTUBE_CACHE_SECONDS", "600"))
 DEFAULT_AGE_HOURS = float(os.getenv("YOUTUBE_MAX_AGE_HOURS", "24"))
 # When a day is empty, widening once beats saying nothing at all.
 FALLBACK_AGE_HOURS = float(os.getenv("YOUTUBE_FALLBACK_AGE_HOURS", "168"))
+# Shorts drown a spoken list. The feed does not say which entries are Shorts
+# and the titles do not either - measured, only 2 of 38 carried "#shorts",
+# and the tag disagreed with reality on 14 of 25. What does work is asking
+# YouTube: /shorts/<id> answers 200 for a Short and redirects (303) for a
+# normal video. Verified against known-long videos and a bad id (404).
+SHORTS_URL = "https://www.youtube.com/shorts/{video_id}"
+SKIP_SHORTS = os.getenv("YOUTUBE_SKIP_SHORTS", "true").strip().lower() != "false"
 
 mcp = FastMCP("YouTube", host=MCP_HOST, port=MCP_PORT, stateless_http=True)
 
@@ -179,6 +186,33 @@ def _fetch_all(channel_ids: list[str]) -> list[Video]:
     return videos
 
 
+def _drop_shorts(videos: list[Video]) -> list[Video]:
+    """Remove Shorts, asking YouTube rather than guessing from the title."""
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+
+    session = requests.Session()
+    session.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:154.0) Gecko/20100101 Firefox/154.0"
+    adapter = requests.adapters.HTTPAdapter(pool_connections=FEED_WORKERS, pool_maxsize=FEED_WORKERS)
+    session.mount("https://", adapter)
+
+    def is_short(video: Video) -> bool:
+        try:
+            response = session.head(SHORTS_URL.format(video_id=video.video_id),
+                                    allow_redirects=False, timeout=FEED_TIMEOUT)
+        except Exception:  # noqa: BLE001 - an unknown answer keeps the video
+            return False
+        return response.status_code == 200
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=FEED_WORKERS) as pool:
+        verdicts = list(pool.map(is_short, videos))
+    kept = [video for video, short in zip(videos, verdicts) if not short]
+    logger.info(f"[YouTube] dropped {len(videos) - len(kept)} short(s) of {len(videos)} "
+                f"in {time.monotonic() - started:.1f}s")
+    return kept
+
+
 async def _videos(force: bool = False) -> list[Video]:
     now = asyncio.get_running_loop().time()
     if not force and _state.videos and (now - _state.fetched_at) < CACHE_SECONDS:
@@ -228,6 +262,8 @@ async def _page(reset: bool, hours: float | None = None) -> str:
             # A quiet day is not an error, but neither is silence an answer.
             wanted = FALLBACK_AGE_HOURS
             window = _recent(videos, wanted)
+        if window and SKIP_SHORTS:
+            window = await asyncio.to_thread(_drop_shorts, window)
         _state.window = window
         _state.window_hours = wanted
         if not window:
@@ -245,7 +281,7 @@ async def _page(reset: bool, hours: float | None = None) -> str:
     tail = " Say which one to play, or ask for more." if remaining > 0 else " Say which one to play."
     head = ""
     if start == 0:
-        head = f"{len(window)} new {'video' if len(window) == 1 else 'videos'} {_window_label(_state.window_hours)}. "
+        head = f"{len(window)} new {'video' if len(window) == 1 else 'videos'} {_window_label(_state.window_hours)}. "  # noqa: E501
     return head + _speak(batch, start) + tail
 
 
