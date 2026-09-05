@@ -53,7 +53,7 @@ async def _run(argv: list[str], stdin: bytes | None = None) -> tuple[int, str]:
 
 
 @mcp.tool()
-async def write_to_desktop(text: str) -> str:
+async def write_to_desktop(text: str, press_enter: bool = False) -> str:
     """Write text onto the desktop, into whatever window is focused.
 
     This is dictation. Use it whenever the user asks to write, type, dictate
@@ -64,6 +64,12 @@ async def write_to_desktop(text: str) -> str:
     for it: for "write to desktop the meeting is at four", `text` is "the
     meeting is at four". It is typed verbatim, so add no quotes, no preamble
     and no commentary of your own.
+
+    `press_enter` sends the text by pressing Return after typing it. Set it
+    to true ONLY when the user actually asked - "and enter", "then press
+    enter", "and send it", "and hit return". Say nothing about enter and it
+    stays false, because pressing it submits whatever window they are in.
+    The word "enter" is an instruction, so it never belongs in `text`.
     """
     text = (text or "").strip()
     if not text:
@@ -76,10 +82,22 @@ async def write_to_desktop(text: str) -> str:
         # `--` so a transcript starting with a dash is text, not a flag.
         code, output = await _run(["wtype", "-d", str(KEY_DELAY_MS), "--", text])
         if code == 0:
-            logger.info(f"[Desktop] typed {len(text)} chars")
-            return f"Typed into the focused window: {text}"
+            logger.info(f"[Desktop] typed {len(text)} chars, enter={press_enter}")
+            if not press_enter:
+                return f"Typed into the focused window: {text}"
+            # A separate keystroke, never part of the text: a newline inside
+            # the typed string would submit halfway through a multi-line note.
+            enter_code, enter_output = await _run(["wtype", "-k", "Return"])
+            if enter_code == 0:
+                return f"Typed and sent: {text}"
+            logger.warning(f"[Desktop] Return failed ({enter_code}): {enter_output}")
+            return f"Typed into the focused window, but could not press enter: {text}"
         logger.warning(f"[Desktop] wtype failed ({code}): {output}")
 
+    if press_enter:
+        # The clipboard cannot press keys. Staging text that was meant to be
+        # sent, and saying it was sent, would be a lie the user acts on.
+        return "Cannot press enter without wtype; install wtype to dictate and send."
     if shutil.which("wl-copy"):
         code, output = await _run(["wl-copy"], text.encode("utf-8"))
         if code == 0:

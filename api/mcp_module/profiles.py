@@ -49,6 +49,14 @@ LOCAL_TOOLS = frozenset({
     "summarize_weekly_dev_activity",
     # dictation into the focused window
     "write_to_desktop",
+    # browser and playback
+    "open_website",
+    "search_youtube",
+    "search_youtube_music",
+    "now_playing",
+    "pause_playback",
+    "next_track",
+    "previous_track",
 })
 
 # None means "no allow-list": take whatever the servers offer.

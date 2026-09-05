@@ -15,6 +15,8 @@ MODULES=(
     mcp_module.dev_activity.stream         # :8002 dev activity
     mcp_module.nextcloud_slim.stream       # :8003 nextcloud, slim
     mcp_module.desktop.stream              # :8004 dictation into the focused window
+    mcp_module.browser.stream              # :8005 open sites and YouTube searches
+    mcp_module.media.stream                # :8006 playback control over MPRIS
 )
 
 mkdir -p "$UNIT_DIR"
