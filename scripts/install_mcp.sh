@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Install the three local MCP servers as user services.
+# Install the local MCP servers as a user service.
 #
-# One templated unit, instantiated per module, because the only thing that
-# differs between them is the module path. The instance name IS the module,
-# so `systemctl --user status servitor-mcp@mcp_module.profiles` reads as what
-# it runs.
+# All of them run in one process: each is a FastMCP instance that would
+# otherwise carry its own interpreter, and that floor measured 59 MB apiece.
+# The addresses do not change - every server still answers on its own port.
+#
+# The templated unit is kept for running one server on its own while working
+# on it: systemctl --user start servitor-mcp@mcp_module.youtube.stream
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -22,11 +24,15 @@ MODULES=(
 
 mkdir -p "$UNIT_DIR"
 sed "s|@ROOT_DIR@|$ROOT_DIR|g" "$ROOT_DIR/scripts/servitor-mcp@.service" > "$UNIT_DIR/servitor-mcp@.service"
+sed "s|@ROOT_DIR@|$ROOT_DIR|g" "$ROOT_DIR/scripts/servitor-mcp-host.service" > "$UNIT_DIR/servitor-mcp-host.service"
 systemctl --user daemon-reload
-echo "[mcp] unit installed: $UNIT_DIR/servitor-mcp@.service"
+echo "[mcp] units installed in $UNIT_DIR"
 
 echo
 echo "Next:"
+echo "  systemctl --user enable --now servitor-mcp-host"
+echo
+echo "To work on one server alone, stop the host and run just that one:"
 for module in "${MODULES[@]}"; do
-    echo "  systemctl --user enable --now 'servitor-mcp@${module}'"
+    echo "  systemctl --user start 'servitor-mcp@${module}'"
 done

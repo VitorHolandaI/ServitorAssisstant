@@ -1,0 +1,19 @@
+[Unit]
+Description=Servitor MCP servers (all of them, one process)
+Documentation=file://@ROOT_DIR@/api/mcp_module/host.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT_DIR@/api
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@ROOT_DIR@/.venv/bin/python -m mcp_module.host
+Restart=on-failure
+RestartSec=5
+# These reach out to Nextcloud, Gitea and YouTube and hold no accelerator;
+# they should yield to whatever the user is actually looking at.
+Nice=5
+
+[Install]
+WantedBy=default.target
