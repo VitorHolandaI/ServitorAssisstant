@@ -52,6 +52,11 @@ FALLBACK_AGE_HOURS = float(os.getenv("YOUTUBE_FALLBACK_AGE_HOURS", "168"))
 # normal video. Verified against known-long videos and a bad id (404).
 SHORTS_URL = "https://www.youtube.com/shorts/{video_id}"
 SKIP_SHORTS = os.getenv("YOUTUBE_SKIP_SHORTS", "true").strip().lower() != "false"
+# Kept warm in the background. Fetching 364 feeds takes ten seconds and
+# probing them for Shorts takes ten more, and a spoken answer cannot wait
+# twenty seconds for work that could have been done while nobody was asking.
+# 0 turns the refresher off and every call pays the full cost.
+PREFETCH_SECONDS = float(os.getenv("YOUTUBE_PREFETCH_SECONDS", "540"))
 # Bounds how long one browse call can hold the microphone.
 MAX_BROWSE_ROUNDS = int(os.getenv("YOUTUBE_BROWSE_ROUNDS", "8"))
 
@@ -85,6 +90,9 @@ class _Feed:
         self.offered: list[Video] = []
         self.window: list[Video] = []
         self.window_hours = 0.0
+        self.prewarmed: list[Video] | None = None
+        self.prewarmed_at = 0.0
+        self.refresher: asyncio.Task | None = None
 
 
 _state = _Feed()
@@ -256,6 +264,7 @@ def _window_label(hours: float) -> str:
 
 
 async def _page(reset: bool, hours: float | None = None) -> str:
+    _start_refresher()
     videos = await _videos()
     if not videos:
         return (
@@ -271,7 +280,12 @@ async def _page(reset: bool, hours: float | None = None) -> str:
             wanted = FALLBACK_AGE_HOURS
             window = _recent(videos, wanted)
         if window and SKIP_SHORTS:
-            window = await asyncio.to_thread(_drop_shorts, window)
+            fresh = (asyncio.get_running_loop().time() - _state.prewarmed_at) < CACHE_SECONDS
+            if _state.prewarmed is not None and fresh and wanted == DEFAULT_AGE_HOURS:
+                window = _state.prewarmed
+                logger.info(f"[YouTube] served {len(window)} prewarmed videos")
+            else:
+                window = await asyncio.to_thread(_drop_shorts, window)
         _state.window = window
         _state.window_hours = wanted
         if not window:
@@ -291,6 +305,40 @@ async def _page(reset: bool, hours: float | None = None) -> str:
     if start == 0:
         head = f"{len(window)} new {'video' if len(window) == 1 else 'videos'} {_window_label(_state.window_hours)}. "  # noqa: E501
     return head + _speak(batch, start) + tail
+
+
+def _start_refresher() -> None:
+    """Start the background refresh, once, on whichever loop is serving.
+
+    Started from the first request rather than from a lifespan hook so it
+    binds to the running loop without depending on how FastMCP is hosted.
+    """
+    if PREFETCH_SECONDS <= 0 or _state.refresher is not None:
+        return
+    _state.refresher = asyncio.get_running_loop().create_task(_keep_warm())
+    logger.info(f"[YouTube] refreshing the feed every {PREFETCH_SECONDS:.0f}s")
+
+
+async def _keep_warm() -> None:
+    """Refresh the merged feed before anyone asks for it.
+
+    The refresh interval sits just inside the cache lifetime, so a request
+    almost always lands on a warm list rather than triggering the fetch
+    itself. Failures are logged and retried on the next tick: a refresher
+    that dies silently leaves every later answer paying full price.
+    """
+    while True:
+        try:
+            videos = await _videos(force=True)
+            if videos and SKIP_SHORTS:
+                # Do the Shorts probing here too, so the window is ready.
+                _state.prewarmed = await asyncio.to_thread(
+                    _drop_shorts, _recent(videos, DEFAULT_AGE_HOURS)
+                )
+                _state.prewarmed_at = asyncio.get_running_loop().time()
+        except Exception:  # noqa: BLE001 - the refresher must outlive one bad tick
+            logger.exception("[YouTube] background refresh failed")
+        await asyncio.sleep(PREFETCH_SECONDS)
 
 
 @mcp.tool()
@@ -437,6 +485,14 @@ async def browse_subscriptions(ctx: Context, since_hours: float = 0) -> str:
             continue
         page = "I did not catch that. Say a video number, or more, or stop."
     return "Stopped."
+
+
+@mcp.custom_route("/healthz", methods=["GET"])
+async def healthz(_request):
+    from starlette.responses import JSONResponse
+
+    ready = _state.prewarmed is not None
+    return JSONResponse({"prewarmed": ready, "videos": len(_state.prewarmed or [])})
 
 
 if __name__ == "__main__":
