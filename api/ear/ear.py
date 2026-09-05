@@ -255,7 +255,13 @@ class ServitorEar:
         # and only the ones that can report a transcript get asked for one.
         if hasattr(responder, "on_heard"):
             responder.on_heard = self._on_heard
+        if hasattr(responder, "ask_audio"):
+            responder.ask_audio = self.ask_user
 
+        # Set while a turn is in flight so a tool can ask the user something
+        # in the middle of its own execution. The ear owns the microphone, so
+        # the question has to come back here to be answered.
+        self._active_stream = None
         self._state = OFF
         self._detail: str | None = None
         self._heard = ""
@@ -506,52 +512,80 @@ class ServitorEar:
         conversation, which is what saying nothing should do.
         """
         logger.info(f"[Ear] wake phrase heard: {self.config.wake_phrase!r}")
-        self._set_turn()
-        self._set_state(AWAKE)
-        self._speak_wav(self._ack_audio())
-        self._drain(stream)
-
-        lead_in = self.config.lead_in_seconds
-        for exchange in range(1 + max(0, self.config.followup_turns)):
-            self._set_state(RECORDING)
-            command = self._record_command(stream, lead_in_seconds=lead_in)
-            if command is None:
-                if exchange == 0:
-                    logger.info("[Ear] no command followed the wake phrase")
-                else:
-                    logger.info("[Ear] conversation ended in silence")
-                return
-
-            spool_path = self.config.spool_dir / f"command-{int(time.time())}.wav"
-            spool_path.write_bytes(command)
-            logger.info(f"[Ear] command captured: {spool_path} ({len(command)} bytes)")
-            self._trim_spool()
-
-            if self.responder is None:
-                return
-
-            self._set_state(THINKING)
-            try:
-                reply = self.responder(command)
-            except Exception as error:
-                logger.exception("[Ear] responder failed")
-                self._set_state(ERROR, str(error))
-                return
-            if not reply:
-                return
-
-            # A responder may answer with plain text or with a Reply carrying
-            # the language it should be spoken in.
-            text = getattr(reply, "text", reply)
-            self._set_turn(getattr(reply, "heard", ""), str(text))
-            self._speak_text(text, getattr(reply, "language", None))
-
-            if self.config.followup_seconds <= 0:
-                return
-            # The reply was just spoken aloud; without this the speaker's own
-            # tail is what the follow-up window hears first.
+        self._active_stream = stream
+        try:
+            self._set_turn()
+            self._set_state(AWAKE)
+            self._speak_wav(self._ack_audio())
             self._drain(stream)
-            lead_in = self.config.followup_seconds
+
+            lead_in = self.config.lead_in_seconds
+            for exchange in range(1 + max(0, self.config.followup_turns)):
+                self._set_state(RECORDING)
+                command = self._record_command(stream, lead_in_seconds=lead_in)
+                if command is None:
+                    if exchange == 0:
+                        logger.info("[Ear] no command followed the wake phrase")
+                    else:
+                        logger.info("[Ear] conversation ended in silence")
+                    return
+
+                spool_path = self.config.spool_dir / f"command-{int(time.time())}.wav"
+                spool_path.write_bytes(command)
+                logger.info(f"[Ear] command captured: {spool_path} ({len(command)} bytes)")
+                self._trim_spool()
+
+                if self.responder is None:
+                    return
+
+                self._set_state(THINKING)
+                try:
+                    reply = self.responder(command)
+                except Exception as error:
+                    logger.exception("[Ear] responder failed")
+                    self._set_state(ERROR, str(error))
+                    return
+                if not reply:
+                    return
+
+                # A responder may answer with plain text or with a Reply carrying
+                # the language it should be spoken in.
+                text = getattr(reply, "text", reply)
+                self._set_turn(getattr(reply, "heard", ""), str(text))
+                self._speak_text(text, getattr(reply, "language", None))
+
+                if self.config.followup_seconds <= 0:
+                    return
+                # The reply was just spoken aloud; without this the speaker's own
+                # tail is what the follow-up window hears first.
+                self._drain(stream)
+                lead_in = self.config.followup_seconds
+        finally:
+            # A tool may only ask the user something inside a turn.
+            self._active_stream = None
+
+    def ask_user(self, question: str) -> bytes | None:
+        """Speak a question mid-turn and record the answer.
+
+        A tool that needs a choice - which video, which of these - can ask for
+        one through MCP elicitation instead of ending its turn and hoping the
+        next thing said is the answer. The ear owns the microphone, so the
+        question is routed back here to be asked out loud and listened for.
+
+        Returns the raw recording; transcribing it belongs to whoever holds
+        the speech model.
+        """
+        stream = self._active_stream
+        if stream is None:
+            logger.warning("[Ear] a tool asked something outside a turn")
+            return None
+        self._set_state(SPEAKING)
+        self._speak_text(question, None)
+        self._drain(stream)
+        self._set_state(RECORDING)
+        answer = self._record_command(stream, lead_in_seconds=self.config.followup_seconds)
+        self._set_state(THINKING)
+        return answer
 
     def _trim_spool(self) -> None:
         """Keep only the newest few recordings.

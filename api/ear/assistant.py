@@ -56,15 +56,31 @@ class LocalAssistant:
         self.whisper = OpenVinoWhisper(config.whisper_model, config.whisper_device)
         self.brain = _brain_for(config)
         self.idle_unload_seconds = config.idle_unload_seconds
+        if hasattr(self.brain, "ask_user"):
+            self.brain.ask_user = self.ask_user
         # Set by the ear. The transcript is worth showing before the model has
         # finished thinking - that is most of the wait, and seeing the words
         # early is how you catch a misheard command while it still matters.
         self.on_heard: Callable[[str], None] | None = None
+        # Set by the ear. A tool that needs a choice asks through this: the
+        # ear speaks the question and records, Whisper turns it into text.
+        self.ask_audio: Callable[[str], bytes | None] | None = None
 
     def warm(self) -> None:
         """Compile both models before the first wake, not during it."""
         self.whisper.warm()
         self.brain.warm()
+
+    def ask_user(self, question: str) -> str:
+        """Ask the user something mid-tool-call and return what they said."""
+        if self.ask_audio is None:
+            return ""
+        wav = self.ask_audio(question)
+        if not wav:
+            return ""
+        heard = self.whisper.transcribe(wav)
+        logger.info(f"[Assistant] answered [{heard.language}]: {heard.text!r}")
+        return heard.text
 
     def tick(self) -> None:
         """Called from the listening loop; drops the LLM once talk has stopped.

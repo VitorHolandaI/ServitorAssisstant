@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -42,8 +43,12 @@ SYSTEM_PROMPT = (
 )
 
 # A spoken turn that has not answered in this long has failed, whatever the
-# agent thinks it is still doing. The user is standing there waiting.
-TURN_TIMEOUT = 90.0
+# agent thinks it is still doing. Generous, because a tool may legitimately
+# stop mid-call to ask the user something and then wait for them to speak -
+# at 90s that wait was being counted as a hang and killed the turn after the
+# answer had already been given. The rounds a browse can take are bounded on
+# the server, so this is a backstop, not the thing that ends a conversation.
+TURN_TIMEOUT = float(os.getenv("EAR_TURN_TIMEOUT", "600"))
 
 
 class AgentBrain:
@@ -69,6 +74,9 @@ class AgentBrain:
         # "CL_OUT_OF_RESOURCES" and took an i915 GPU HANG with them. Freeing
         # between turns costs a rebuild and keeps the session alive.
         self.free_after_turn = free_after_turn
+        # Answers an MCP elicitation: a tool asking the user something in the
+        # middle of its own execution. Set by the assistant that owns Whisper.
+        self.ask_user = None
         self._client = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -100,6 +108,7 @@ class AgentBrain:
             model_address=str(self.model_dir),
             system_prompt=SYSTEM_PROMPT,
             profile=self.profile,
+            ask_user=self.ask_user,
         )
         self._client._llm.device = self.device
         self._client._llm.max_tokens = self.max_tokens

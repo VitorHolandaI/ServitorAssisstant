@@ -9,7 +9,7 @@ import httpx
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langgraph.prebuilt import create_react_agent
-from mcp import ClientSession
+from mcp import ClientSession, types
 from mcp.client.streamable_http import streamablehttp_client
 from mcp_module.profiles import DEFAULT_PROFILE, select_tools
 
@@ -99,12 +99,16 @@ def _is_explicit_nextcloud_completion(message: str) -> bool:
 
 class llm_mcp_client:
     def __init__(self, mcp_addresses: list, model_name: str, model_address: str, system_prompt: str,
-                 profile: str | None = None):
+                 profile: str | None = None, ask_user=None):
         self.mcp_addresses = mcp_addresses
         # Which tools this agent may see. The server takes them all; the
         # laptop takes the spoken subset, which is smaller context for a
         # smaller model and a narrower blast radius for a misheard sentence.
         self.profile = profile or os.getenv("MCP_PROFILE", DEFAULT_PROFILE)
+        # Answers MCP elicitation: a tool pausing mid-call to ask the user
+        # something. Without one, a tool that asks is told nobody is there,
+        # which is the truth for a server with no user attached to it.
+        self.ask_user = ask_user
         self.model_name = model_name
         self.model_address = model_address
         self.prompt = system_prompt
@@ -160,7 +164,12 @@ class llm_mcp_client:
         if self._stack is None:
             self._stack = contextlib.AsyncExitStack()
             clients = [await self._stack.enter_async_context(_open_endpoint(addr)) for addr in self.mcp_addresses]
-            sessions = [await self._stack.enter_async_context(ClientSession(read, write)) for read, write, _ in clients]
+            sessions = [
+                await self._stack.enter_async_context(
+                    ClientSession(read, write, elicitation_callback=self._elicitation_callback())
+                )
+                for read, write, _ in clients
+            ]
             all_tools = []
             for session in sessions:
                 await session.initialize()
@@ -171,6 +180,29 @@ class llm_mcp_client:
 
         all_tools = select_tools(list(self._tools_by_name.values()), self.profile)
         self._agent = create_react_agent(self._llm, all_tools)
+
+    def _elicitation_callback(self):
+        """Route a tool's question to the user, if anyone can be asked."""
+        if self.ask_user is None:
+            return None
+
+        async def answer(context, params):
+            question = getattr(params, "message", "") or ""
+            logger.info(f"[client2] tool is asking: {question[:120]!r}")
+            # ask_user blocks on a microphone; keep the event loop free.
+            said = await asyncio.to_thread(self.ask_user, question)
+            if not said:
+                logger.info("[client2] nobody answered")
+                return types.ElicitResult(action="decline")
+            schema = getattr(params, "requestedSchema", None) or {}
+            fields = list((schema.get("properties") or {}).keys())
+            # Spoken answers are one string; fill whatever single field the
+            # tool asked for rather than guessing at a shape.
+            content = {fields[0]: said} if len(fields) == 1 else {"answer": said}
+            logger.info(f"[client2] answered with {said[:80]!r}")
+            return types.ElicitResult(action="accept", content=content)
+
+        return answer
 
     async def _try_direct_tool(self, message: str) -> str | None:
         if not _is_explicit_nextcloud_completion(message):
@@ -223,7 +255,11 @@ class llm_mcp_client:
                 return {"messages": [AIMessage(content=direct_result)]}
             prompt = system_prompt or self.prompt
             msgs = _build_messages(message, history, prompt)
-            response = await asyncio.wait_for(self._agent.ainvoke({"messages": msgs}), timeout=120)
+            # A tool may pause to ask the user something; that wait is legitimate.
+            response = await asyncio.wait_for(
+                self._agent.ainvoke({"messages": msgs}),
+                timeout=float(os.getenv("MCP_AGENT_TIMEOUT", "600")),
+            )
 
             tool_calls_used = []
             self.last_usage = None

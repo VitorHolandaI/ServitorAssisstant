@@ -58,6 +58,7 @@ LOCAL_TOOLS = frozenset({
     "next_track",
     "previous_track",
     # what is new on the channels you follow
+    "browse_subscriptions",
     "list_new_videos",
     "more_videos",
     "play_video",

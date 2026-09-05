@@ -20,7 +20,8 @@ import time
 from dataclasses import dataclass
 from xml.etree import ElementTree  # nosec B405 - payload is guarded in _parse
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
+from pydantic import BaseModel, Field
 
 from mcp_module.browser.open_url import open_url
 from mcp_module.youtube import channels as channel_store
@@ -51,8 +52,15 @@ FALLBACK_AGE_HOURS = float(os.getenv("YOUTUBE_FALLBACK_AGE_HOURS", "168"))
 # normal video. Verified against known-long videos and a bad id (404).
 SHORTS_URL = "https://www.youtube.com/shorts/{video_id}"
 SKIP_SHORTS = os.getenv("YOUTUBE_SKIP_SHORTS", "true").strip().lower() != "false"
+# Bounds how long one browse call can hold the microphone.
+MAX_BROWSE_ROUNDS = int(os.getenv("YOUTUBE_BROWSE_ROUNDS", "8"))
 
-mcp = FastMCP("YouTube", host=MCP_HOST, port=MCP_PORT, stateless_http=True)
+# Stateful on purpose, unlike the other servers. Elicitation is a request the
+# SERVER makes of the client, and its answer comes back as a separate message
+# that has to be matched to it. Stateless HTTP tears the session down between
+# messages, so the answer arrived as "response with an unknown request ID" and
+# the question was never answered.
+mcp = FastMCP("YouTube", host=MCP_HOST, port=MCP_PORT, stateless_http=False)
 
 
 @dataclass(frozen=True)
@@ -358,7 +366,79 @@ async def followed_channels() -> str:
     return f"Following {len(followed)} channels: {', '.join(names)}{tail}."
 
 
+class VideoChoice(BaseModel):
+    """What the user said when asked which video they want."""
+
+    answer: str = Field(
+        description="A video number to play, 'more' for the next three, or 'no' to stop.",
+    )
+
+
+# Written as digits by Whisper about as often as words, and "to"/"too" for two
+# is a transcription this has actually produced.
+_SPOKEN_NUMBERS = {
+    "one": 1, "two": 2, "to": 2, "too": 2, "three": 3, "four": 4, "for": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "um": 1, "dois": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6,
+}
+_MORE = ("more", "next", "another", "others", "mais", "outro", "outros", "proximo")
+_STOP = ("no", "stop", "none", "nothing", "cancel", "nao", "para", "nenhum", "sair")
+
+
+def _understand(said: str) -> tuple[str, int]:
+    """Read a spoken answer as (action, number)."""
+    text = said.strip().lower()
+    if not text:
+        return "stop", 0
+    for word in _STOP:
+        if re.search(rf"\b{word}\b", text):
+            return "stop", 0
+    for word in _MORE:
+        if re.search(rf"\b{word}\b", text):
+            return "more", 0
+    digits = re.search(r"\b(\d{1,3})\b", text)
+    if digits:
+        return "play", int(digits.group(1))
+    for word, value in _SPOKEN_NUMBERS.items():
+        if re.search(rf"\b{word}\b", text):
+            return "play", value
+    return "unclear", 0
+
+
+@mcp.tool()
+async def browse_subscriptions(ctx: Context, since_hours: float = 0) -> str:
+    """Read out new videos and wait for the user to choose one, in one call.
+
+    Prefer this over list_new_videos when the user wants to browse: it reads
+    three, asks which one, and keeps going until they pick or stop - without
+    handing control back between each step.
+    """
+    page = await _page(reset=True, hours=since_hours or None)
+    if not _state.window:
+        return page
+
+    for _ in range(MAX_BROWSE_ROUNDS):
+        try:
+            result = await ctx.elicit(message=page, schema=VideoChoice)
+        except Exception:  # noqa: BLE001 - a client that cannot ask is not an error
+            logger.info("[YouTube] the client cannot ask the user; listing instead")
+            return page
+        if result.action != "accept" or result.data is None:
+            return "Stopped."
+
+        action, number = _understand(result.data.answer)
+        if action == "stop":
+            return "Stopped."
+        if action == "play":
+            return await play_video(number)
+        if action == "more":
+            page = await _page(reset=False)
+            continue
+        page = "I did not catch that. Say a video number, or more, or stop."
+    return "Stopped."
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    logger.info(f"[YouTube] serving 5 tools on http://{MCP_HOST}:{MCP_PORT}/mcp")
+    logger.info(f"[YouTube] serving 6 tools on http://{MCP_HOST}:{MCP_PORT}/mcp")
     mcp.run(transport="streamable-http")

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from mcp_module.youtube import channels  # noqa: E402
 from mcp_module.youtube.stream import (  # noqa: E402
     Video,
+    _understand,
     _ago,
     _parse,
     _recent,
@@ -159,3 +160,39 @@ class RecencyWindowTests(unittest.TestCase):
         self.assertEqual(_window_label(24), "today")
         self.assertEqual(_window_label(48), "in the last two days")
         self.assertEqual(_window_label(168), "in the last 7 days")
+
+
+class SpokenChoiceTests(unittest.TestCase):
+    """What the user says when a tool stops to ask which video they want."""
+
+    def test_a_spoken_number_plays(self):
+        self.assertEqual(_understand("play video two"), ("play", 2))
+
+    def test_a_digit_plays(self):
+        self.assertEqual(_understand("video 3"), ("play", 3))
+
+    def test_two_misheard_as_too_still_plays(self):
+        # Whisper produced exactly this: "Play video too."
+        self.assertEqual(_understand("play video too"), ("play", 2))
+
+    def test_asking_for_more_pages(self):
+        self.assertEqual(_understand("more please"), ("more", 0))
+        self.assertEqual(_understand("mais"), ("more", 0))
+
+    def test_refusing_stops(self):
+        self.assertEqual(_understand("no I don't want that"), ("stop", 0))
+        self.assertEqual(_understand("para"), ("stop", 0))
+
+    def test_silence_stops(self):
+        self.assertEqual(_understand(""), ("stop", 0))
+
+    def test_refusal_wins_over_a_number_in_the_same_sentence(self):
+        # "no, not video 2" must not play video 2.
+        self.assertEqual(_understand("no not video 2"), ("stop", 0))
+
+    def test_something_unreadable_is_not_guessed_at(self):
+        self.assertEqual(_understand("uh what"), ("unclear", 0))
+
+    def test_portuguese_numbers_are_understood(self):
+        self.assertEqual(_understand("quero o 5"), ("play", 5))
+        self.assertEqual(_understand("toca o dois"), ("play", 2))
