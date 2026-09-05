@@ -58,6 +58,11 @@ class EarConfig:
     vox_profile: str = "heavy"
     ack_text: str = "I'm here."
     spool_dir: Path = Path.home() / ".cache" / "servitor" / "spool"
+    # How many command recordings to keep. They are kept at all so a bad
+    # transcription can be listened to afterwards, which is only useful for
+    # the last few; without a cap the directory grows for the life of the
+    # install, holding every sentence ever spoken near the microphone.
+    spool_keep: int = 3
     whisper_model: Path = REPO_ROOT / "voice_models" / "whisper-base-fp16-ov"
     whisper_device: str = "NPU"
     llm_model: Path = REPO_ROOT / "voice_models" / "qwen2.5-1.5b-instruct-int4-ov"
@@ -127,6 +132,7 @@ class EarConfig:
             server_url=str_env("EAR_SERVER_URL", defaults.server_url),
             idle_unload_seconds=float(str_env("EAR_IDLE_UNLOAD_SECONDS", str(defaults.idle_unload_seconds))),
             spool_dir=path_env("EAR_SPOOL_DIR", defaults.spool_dir),
+            spool_keep=int(str_env("EAR_SPOOL_KEEP", str(defaults.spool_keep))),
             silence_seconds=float(str_env("EAR_SILENCE_SECONDS", str(defaults.silence_seconds))),
             max_command_seconds=float(str_env("EAR_MAX_COMMAND_SECONDS", str(defaults.max_command_seconds))),
             min_command_seconds=float(str_env("EAR_MIN_COMMAND_SECONDS", str(defaults.min_command_seconds))),
@@ -195,9 +201,15 @@ class ServitorEar:
     def __init__(self, config: EarConfig, responder: Callable[[bytes], str | None] | None = None):
         self.config = config
         self.responder = responder
+        # Duck-typed on purpose: the ear works with any callable responder,
+        # and only the ones that can report a transcript get asked for one.
+        if hasattr(responder, "on_heard"):
+            responder.on_heard = self._on_heard
 
         self._state = OFF
         self._detail: str | None = None
+        self._heard = ""
+        self._reply = ""
         self._lock = threading.Lock()
         self._subscribers: list[Callable[[dict], None]] = []
 
@@ -221,6 +233,10 @@ class ServitorEar:
                 "enabled": self._enabled.is_set(),
                 "wake_phrase": self.config.wake_phrase,
                 "detail": self._detail,
+                # What this turn heard and answered, for anything drawing a
+                # transcript. Empty between turns rather than stale.
+                "heard": self._heard,
+                "reply": self._reply,
                 "ts": time.time(),
             }
 
@@ -238,6 +254,29 @@ class ServitorEar:
         with self._lock:
             if callback in self._subscribers:
                 self._subscribers.remove(callback)
+
+    def _on_heard(self, heard: str) -> None:
+        """The transcript, as soon as it exists - before the model answers."""
+        self._set_turn(heard, "")
+
+    def _set_turn(self, heard: str = "", reply: str = "") -> None:
+        """Record the current turn's transcript, and push it to subscribers.
+
+        Kept separate from the state so a widget can show what was said while
+        the state moves on from thinking to speaking underneath it.
+        """
+        with self._lock:
+            if heard == self._heard and reply == self._reply:
+                return
+            self._heard = heard
+            self._reply = reply
+            subscribers = list(self._subscribers)
+        payload = self.snapshot()
+        for callback in subscribers:
+            try:
+                callback(payload)
+            except Exception as error:
+                logger.debug(f"[Ear] subscriber failed: {error}")
 
     def _set_state(self, state: str, detail: str | None = None) -> None:
         with self._lock:
@@ -381,6 +420,7 @@ class ServitorEar:
 
     def _handle_wake(self, stream) -> None:
         logger.info(f"[Ear] wake phrase heard: {self.config.wake_phrase!r}")
+        self._set_turn()
         self._set_state(AWAKE)
         self._speak_wav(self._ack_audio())
         self._drain(stream)
@@ -394,6 +434,7 @@ class ServitorEar:
         spool_path = self.config.spool_dir / f"command-{int(time.time())}.wav"
         spool_path.write_bytes(command)
         logger.info(f"[Ear] command captured: {spool_path} ({len(command)} bytes)")
+        self._trim_spool()
 
         if self.responder is None:
             return
@@ -408,7 +449,35 @@ class ServitorEar:
         if reply:
             # A responder may answer with plain text or with a Reply carrying
             # the language it should be spoken in.
-            self._speak_text(getattr(reply, "text", reply), getattr(reply, "language", None))
+            text = getattr(reply, "text", reply)
+            self._set_turn(getattr(reply, "heard", ""), str(text))
+            self._speak_text(text, getattr(reply, "language", None))
+
+    def _trim_spool(self) -> None:
+        """Keep only the newest few recordings.
+
+        These are recordings of a microphone in someone's home. Keeping the
+        last few is a debugging aid; keeping all of them forever is a
+        liability, so the cap is enforced on every capture rather than by
+        anything the user has to remember to run.
+        """
+        keep = max(0, self.config.spool_keep)
+        try:
+            recordings = sorted(
+                self.config.spool_dir.glob("command-*.wav"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError as error:
+            logger.debug(f"[Ear] could not list the spool: {error}")
+            return
+        for stale in recordings[keep:]:
+            try:
+                stale.unlink()
+            except OSError as error:
+                logger.debug(f"[Ear] could not remove {stale}: {error}")
+        if len(recordings) > keep:
+            logger.info(f"[Ear] spool trimmed to {keep} recording(s)")
 
     def _drain(self, stream) -> None:
         """Throw away everything the microphone heard while we were talking.

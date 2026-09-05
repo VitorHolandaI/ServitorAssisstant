@@ -21,6 +21,8 @@ BarWidget {
   property bool enabled: false
   property string wakePhrase: ""
   property string detail: ""
+  property string heard: ""
+  property string reply: ""
 
   readonly property var glyphs: ({
     "off": "○",
@@ -53,6 +55,8 @@ BarWidget {
           root.enabled = payload.enabled === true
           root.wakePhrase = payload.wake_phrase !== undefined && payload.wake_phrase !== null ? payload.wake_phrase : ""
           root.detail = payload.detail !== undefined && payload.detail !== null ? payload.detail : ""
+          root.heard = payload.heard !== undefined && payload.heard !== null ? payload.heard : ""
+          root.reply = payload.reply !== undefined && payload.reply !== null ? payload.reply : ""
         } catch (error) {
           console.warn("vitor.servitor: bad status line", error)
         }
@@ -71,6 +75,15 @@ BarWidget {
   }
 
   Process { id: toggler; command: [root.earBin, "toggle"] }
+
+  // The card that shows the turn as it happens. It draws its own overlay
+  // surface, so it is a sibling of the bar glyph rather than inside it.
+  ListeningOverlay {
+    earState: root.state
+    heard: root.heard
+    reply: root.reply
+    wakePhrase: root.wakePhrase
+  }
 
   function tooltipText() {
     if (detail !== "") return "Servitor ear: " + state + " (" + detail + ")"

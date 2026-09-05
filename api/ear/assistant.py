@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,10 +15,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Reply:
-    """An answer, and the language it should be spoken in."""
+    """An answer, the language it should be spoken in, and what prompted it.
+
+    `heard` travels with the reply so the ear can show the transcript without
+    reaching into the assistant: the ear never sees the audio decoded, only
+    what comes back from the responder.
+    """
 
     text: str
     language: str = "en"
+    heard: str = ""
 
 
 class LocalAssistant:
@@ -31,6 +38,10 @@ class LocalAssistant:
             else LocalBrain(config.llm_model, config.llm_device)
         )
         self.idle_unload_seconds = config.idle_unload_seconds
+        # Set by the ear. The transcript is worth showing before the model has
+        # finished thinking - that is most of the wait, and seeing the words
+        # early is how you catch a misheard command while it still matters.
+        self.on_heard: Callable[[str], None] | None = None
 
     def warm(self) -> None:
         """Compile both models before the first wake, not during it."""
@@ -52,11 +63,13 @@ class LocalAssistant:
         logger.info(f"[Assistant] heard [{heard.language}]: {heard.text!r}")
         if not heard:
             return None
+        if self.on_heard is not None:
+            self.on_heard(heard.text)
         answer = self.brain.answer(heard.text)
         logger.info(f"[Assistant] reply: {answer!r}")
         # Spoken back in the language it was asked in, using the voice that
         # actually belongs to that language.
-        return Reply(answer, heard.language) if answer else None
+        return Reply(answer, heard.language, heard.text) if answer else None
 
 
 def build(config: EarConfig) -> LocalAssistant | None:

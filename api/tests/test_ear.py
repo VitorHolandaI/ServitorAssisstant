@@ -586,3 +586,57 @@ class IdleUnloadTests(unittest.TestCase):
         brain = self._brain()
         brain._pipeline = None
         self.assertFalse(brain.unload_if_idle(1.0))
+
+
+class SpoolRetentionTests(unittest.TestCase):
+    """Recordings of a home microphone are not kept forever."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.spool = Path(self.tmp.name)
+
+    def _ear(self, keep: int):
+        config = EarConfig(spool_dir=self.spool, spool_keep=keep)
+        return ServitorEar(config)
+
+    def _recording(self, name: str, mtime: float) -> Path:
+        path = self.spool / name
+        path.write_bytes(b"RIFF")
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_only_the_newest_recordings_survive(self):
+        for index in range(6):
+            self._recording(f"command-{index}.wav", 1000.0 + index)
+        self._ear(3)._trim_spool()
+        left = sorted(p.name for p in self.spool.glob("command-*.wav"))
+        self.assertEqual(left, ["command-3.wav", "command-4.wav", "command-5.wav"])
+
+    def test_a_spool_under_the_cap_is_left_alone(self):
+        self._recording("command-0.wav", 1000.0)
+        self._ear(3)._trim_spool()
+        self.assertEqual(len(list(self.spool.glob("command-*.wav"))), 1)
+
+    def test_a_zero_cap_keeps_nothing(self):
+        self._recording("command-0.wav", 1000.0)
+        self._ear(0)._trim_spool()
+        self.assertEqual(list(self.spool.glob("command-*.wav")), [])
+
+    def test_files_that_are_not_recordings_are_never_touched(self):
+        keeper = self.spool / "notes.txt"
+        keeper.write_text("mine", encoding="utf-8")
+        for index in range(5):
+            self._recording(f"command-{index}.wav", 1000.0 + index)
+        self._ear(1)._trim_spool()
+        self.assertTrue(keeper.exists())
+
+    def test_a_missing_spool_directory_is_not_an_error(self):
+        config = EarConfig(spool_dir=self.spool / "gone", spool_keep=3)
+        ServitorEar(config)._trim_spool()
+
+    def test_the_cap_is_configurable(self):
+        with _env(EAR_SPOOL_KEEP="7"):
+            self.assertEqual(EarConfig.from_env().spool_keep, 7)
