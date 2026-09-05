@@ -114,7 +114,17 @@ def _strip_thinking(text: str) -> str:
 
 
 def _parse_tool_calls(text: str) -> list[dict]:
-    """Parse <tool_call>...</tool_call> JSON blocks from model output."""
+    """Parse <tool_call>...</tool_call> JSON blocks from model output.
+
+    Read afterwards rather than constrained during generation. openvino_genai
+    offers StructuredOutputConfig with TriggeredTags, which switches the
+    decoder into schema-constrained sampling when it emits a trigger, and that
+    was tried here: on qwen3-4b it produced byte-identical output at every
+    token budget, because the model's own chat template already has it
+    emitting well-formed blocks. It does not rescue a call truncated by
+    max_new_tokens either - the grammar constrains which tokens are legal,
+    not how many are left. So the constraint bought nothing and was dropped.
+    """
     calls = []
     for match in re.finditer(r"<tool_call>(.*?)</tool_call>", text, re.DOTALL):
         try:
