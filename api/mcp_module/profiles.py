@@ -62,6 +62,7 @@ LOCAL_TOOLS = frozenset({
     "list_new_videos",
     "more_videos",
     "play_video",
+    "play_from_subscriptions",
     "follow_channel",
     "followed_channels",
 })

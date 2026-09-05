@@ -551,6 +551,12 @@ class ServitorEar:
                 # A responder may answer with plain text or with a Reply carrying
                 # the language it should be spoken in.
                 text = getattr(reply, "text", reply)
+                if getattr(reply, "end_conversation", False):
+                    logger.info("[Ear] asked to stop; closing the conversation")
+                    self._set_turn(getattr(reply, "heard", ""), "")
+                    if text:
+                        self._speak_text(text, getattr(reply, "language", None))
+                    return
                 self._set_turn(getattr(reply, "heard", ""), str(text))
                 self._speak_text(text, getattr(reply, "language", None))
 

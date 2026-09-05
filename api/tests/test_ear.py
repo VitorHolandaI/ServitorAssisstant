@@ -31,6 +31,7 @@ from ear.ear import (  # noqa: E402
     _to_wav,
 )
 from ear.brain import LocalBrain  # noqa: E402
+from ear.stop_words import is_stop_phrase  # noqa: E402
 from ear.devices import (  # noqa: E402
     connected_displays,
     fits_on_shared_gpu,
@@ -827,3 +828,36 @@ class ConversationMemoryTests(unittest.TestCase):
         assistant.brain = self._Brain()
         assistant.forget()
         self.assertEqual(assistant.brain.forgotten, 1)
+
+
+class StopPhraseTests(unittest.TestCase):
+    """Being asked to stop must not depend on the model agreeing to stop."""
+
+    def test_a_bare_stop_is_a_stop(self):
+        for said in ("Stop.", "para", "chega", "nevermind", "no thanks"):
+            self.assertTrue(is_stop_phrase(said), said)
+
+    def test_repeating_it_is_still_a_stop(self):
+        # Exactly what was said, and answered with "I will stop listening".
+        self.assertTrue(is_stop_phrase("stop stop listening"))
+
+    def test_filler_around_it_does_not_hide_it(self):
+        self.assertTrue(is_stop_phrase("ok stop please"))
+
+    def test_a_command_containing_stop_is_not_a_stop(self):
+        self.assertFalse(is_stop_phrase("stop the timer at 5 minutes"))
+
+    def test_an_ordinary_request_is_not_a_stop(self):
+        for said in ("what is the weather", "play video two", "list my subscriptions"):
+            self.assertFalse(is_stop_phrase(said), said)
+
+    def test_a_mistranscription_is_not_assumed_to_be_a_stop(self):
+        # "Stop body" was heard once; the second word means nothing here.
+        self.assertFalse(is_stop_phrase("Stop body"))
+
+    def test_silence_is_not_a_stop_phrase(self):
+        self.assertFalse(is_stop_phrase(""))
+        self.assertFalse(is_stop_phrase("   "))
+
+    def test_a_long_utterance_is_never_a_stop(self):
+        self.assertFalse(is_stop_phrase("stop stop stop stop stop"))
