@@ -39,6 +39,20 @@ SPEAKING = "speaking"
 ERROR = "error"
 
 
+def _mcp_addresses() -> tuple[str, ...]:
+    """The MCP endpoints, from the same env the server reads.
+
+    EAR_MCP_ADDRESSES overrides for the ear alone; otherwise MCP_ADDRESS and
+    MCP_EXTRA_ADDRESSES are reused, so pointing the project at a different set
+    of servers moves the ear with it.
+    """
+    raw = os.getenv("EAR_MCP_ADDRESSES", "").strip()
+    if not raw:
+        parts = [os.getenv("MCP_ADDRESS", "").strip(), os.getenv("MCP_EXTRA_ADDRESSES", "").strip()]
+        raw = ",".join(part for part in parts if part)
+    return tuple(address.strip() for address in raw.split(",") if address.strip())
+
+
 @dataclass(frozen=True)
 class EarConfig:
     """Everything tunable, resolved once at startup."""
@@ -71,6 +85,15 @@ class EarConfig:
     # The server runs the LangGraph ReAct agent with tools (weather, Nextcloud,
     # Home Assistant, etc). Format: "http://host:port" (default port 8000).
     server_url: str = ""
+    # Give the spoken assistant the local MCP tools instead of answering from
+    # the model alone. The endpoints are the ones the rest of the project
+    # already configures, so there is one list of MCP servers, not two.
+    agent_enabled: bool = True
+    mcp_addresses: tuple[str, ...] = ()
+    mcp_profile: str = "local"
+    # Drop the model between spoken turns while the agent is in use. See
+    # AgentBrain: leaving an agent's KV cache on the display GPU hung it.
+    agent_free_after_turn: bool = True
     # How long the room must stay quiet before the language model is dropped
     # from the accelerator. Measured on qwen3-4b: holding it costs ~975 MB Rss,
     # rebuilding it from a warm cache costs 3.8 s. Keeping it for the length of
@@ -141,6 +164,10 @@ class EarConfig:
             llm_model=path_env("EAR_LLM_MODEL", defaults.llm_model),
             llm_device=str_env("EAR_LLM_DEVICE", defaults.llm_device).upper(),
             server_url=str_env("EAR_SERVER_URL", defaults.server_url),
+            agent_enabled=str_env("EAR_AGENT", "true").lower() != "false",
+            mcp_addresses=_mcp_addresses(),
+            mcp_profile=str_env("EAR_MCP_PROFILE", defaults.mcp_profile),
+            agent_free_after_turn=str_env("EAR_AGENT_FREE_AFTER_TURN", "true").lower() != "false",
             idle_unload_seconds=float(str_env("EAR_IDLE_UNLOAD_SECONDS", str(defaults.idle_unload_seconds))),
             spool_dir=path_env("EAR_SPOOL_DIR", defaults.spool_dir),
             spool_keep=int(str_env("EAR_SPOOL_KEEP", str(defaults.spool_keep))),

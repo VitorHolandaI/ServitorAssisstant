@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ear.brain import LocalBrain, ServerBrain
+from ear.devices import guard_device
 from ear.ear import EarConfig
 from ear.transcribe import OpenVinoWhisper
 
@@ -27,16 +28,33 @@ class Reply:
     heard: str = ""
 
 
+def _brain_for(config: EarConfig):
+    """Pick what answers a command: the server, the local tools, or the model.
+
+    Only one of these is ever built. They each hold their own copy of the
+    model on the accelerator, and this machine has room for one.
+    """
+    if config.server_url:
+        return ServerBrain(config.server_url)
+    if config.agent_enabled and config.mcp_addresses:
+        from ear.agent_brain import AgentBrain
+
+        return AgentBrain(
+            config.llm_model,
+            guard_device(config.llm_device, "the language model", model_dir=config.llm_model),
+            list(config.mcp_addresses),
+            config.mcp_profile,
+            free_after_turn=config.agent_free_after_turn,
+        )
+    return LocalBrain(config.llm_model, config.llm_device)
+
+
 class LocalAssistant:
     """The responder the ear calls once it has captured a command."""
 
     def __init__(self, config: EarConfig):
         self.whisper = OpenVinoWhisper(config.whisper_model, config.whisper_device)
-        self.brain = (
-            ServerBrain(config.server_url)
-            if config.server_url
-            else LocalBrain(config.llm_model, config.llm_device)
-        )
+        self.brain = _brain_for(config)
         self.idle_unload_seconds = config.idle_unload_seconds
         # Set by the ear. The transcript is worth showing before the model has
         # finished thinking - that is most of the wait, and seeing the words

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,6 +31,13 @@ from langchain_core.tools import BaseTool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 logger = logging.getLogger(__name__)
+
+# How much of a tool's answer the model is shown. A 3 KB result from
+# summarize_weekly_dev_activity made a 4B degenerate into a run of "!" and
+# took 53s doing it, where results under ~1.3 KB answered cleanly in 12s. The
+# tail of a long listing is rarely what was asked for, so it is cheaper to cut
+# it than to lose the whole turn.
+MAX_TOOL_RESULT_CHARS = int(os.getenv("OV_MAX_TOOL_RESULT_CHARS", "1400"))
 
 
 def _block_text(content) -> str:
@@ -83,6 +91,9 @@ def _to_chatml(messages: list[BaseMessage]) -> list[dict]:
                 ]
             result.append(entry)
         elif isinstance(m, ToolMessage):
+            if len(text) > MAX_TOOL_RESULT_CHARS:
+                logger.info(f"[OVChat] trimming a {len(text)}-char tool result")
+                text = text[:MAX_TOOL_RESULT_CHARS].rstrip() + "\n[...truncated]"
             result.append({"role": "tool", "content": text})
         elif isinstance(m, ChatMessage):
             result.append({"role": m.role, "content": text})
