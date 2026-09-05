@@ -1,7 +1,7 @@
 """Typing into whatever window has focus.
 
 The wake word already produces an accurate transcript; this turns it into
-keystrokes, so "hey oracle, write to window <something>" lands the text in
+keystrokes, so "hey oracle, write to desktop <something>" lands the text in
 the editor or chat box that is focused, the way voxtype's dictation does.
 
 Wayland has no way for an ordinary process to synthesise input, so this goes
@@ -53,12 +53,17 @@ async def _run(argv: list[str], stdin: bytes | None = None) -> tuple[int, str]:
 
 
 @mcp.tool()
-async def type_into_focused_window(text: str) -> str:
-    """Type text into whichever window currently has keyboard focus.
+async def write_to_desktop(text: str) -> str:
+    """Write text onto the desktop, into whatever window is focused.
 
-    Use for dictation: when the user asks to write, type or dictate something
-    into the window they are looking at. The text is typed verbatim - do not
-    add quotes, commentary or a preamble.
+    This is dictation. Use it whenever the user asks to write, type, dictate
+    or put something on the desktop, on the screen, or into the window -
+    "write to desktop", "write this down", "type this out".
+
+    `text` is only what they want written, never the instruction that asked
+    for it: for "write to desktop the meeting is at four", `text` is "the
+    meeting is at four". It is typed verbatim, so add no quotes, no preamble
+    and no commentary of your own.
     """
     text = (text or "").strip()
     if not text:

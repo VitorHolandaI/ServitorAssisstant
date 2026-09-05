@@ -12,7 +12,7 @@ verbs, and no Wake-on-LAN, because a wake packet should not be one misheard
 word away.
 
 The one tool here that acts rather than reports is
-`type_into_focused_window`, which is the point of it - dictation only works
+`write_to_desktop`, which is the point of it - dictation only works
 if the words reach the window. It types wherever the cursor is, so what is
 focused when you speak is what receives it.
 
@@ -48,7 +48,7 @@ LOCAL_TOOLS = frozenset({
     # dev activity
     "summarize_weekly_dev_activity",
     # dictation into the focused window
-    "type_into_focused_window",
+    "write_to_desktop",
 })
 
 # None means "no allow-list": take whatever the servers offer.

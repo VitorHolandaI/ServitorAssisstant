@@ -76,8 +76,13 @@ class EarConfig:
     # rebuilding it from a warm cache costs 3.8 s. Keeping it for the length of
     # a conversation and freeing it afterwards pays neither on a follow-up.
     idle_unload_seconds: float = 600.0
-    silence_seconds: float = 1.2
-    max_command_seconds: float = 15.0
+    # How long the room must stay quiet before a command counts as finished.
+    # At 1.2s a pause for breath ended the sentence mid-thought. A breath is
+    # comfortably under two seconds; a real end-of-turn pause is longer.
+    silence_seconds: float = 2.0
+    # Raised alongside it: a sentence with a breath in it is now allowed to
+    # run to its end rather than being cut by the ceiling instead.
+    max_command_seconds: float = 20.0
     min_command_seconds: float = 0.4
     # How long to wait for you to start talking after the acknowledgement.
     # A person needs about a second; the old behaviour started counting
@@ -92,6 +97,12 @@ class EarConfig:
     # Stage zero: only run the decoder while there is sound worth decoding.
     # Commercial wake-word stacks are built the same way round — the cheapest
     # thing runs always, and wakes the next stage up.
+    # Only act on a decoder result the recogniser has committed to. A partial
+    # is a running hypothesis that it is still free to withdraw, and it is
+    # where the false wakes came from: "ok then" matched the phrase as a
+    # partial and never as a final. Measured 1/12 vs 0/12 on spoken "ok"
+    # variants, with true phrases still at 4/4 either way.
+    wake_require_final: bool = True
     vad_enabled: bool = True
     # Audio kept from before speech was detected, so the decoder still hears
     # the first syllable of the phrase rather than starting mid-word.
@@ -139,6 +150,7 @@ class EarConfig:
             lead_in_seconds=float(str_env("EAR_LEAD_IN_SECONDS", str(defaults.lead_in_seconds))),
             speech_onset_seconds=float(str_env("EAR_SPEECH_ONSET_SECONDS", str(defaults.speech_onset_seconds))),
             settle_seconds=float(str_env("EAR_SETTLE_SECONDS", str(defaults.settle_seconds))),
+            wake_require_final=str_env("EAR_WAKE_REQUIRE_FINAL", "true").lower() != "false",
             vad_enabled=str_env("EAR_VAD", "true").lower() != "false",
             vad_preroll_seconds=float(str_env("EAR_VAD_PREROLL_SECONDS", str(defaults.vad_preroll_seconds))),
             vad_hangover_seconds=float(str_env("EAR_VAD_HANGOVER_SECONDS", str(defaults.vad_hangover_seconds))),
@@ -382,7 +394,15 @@ class ServitorEar:
                 if gate is not None:
                     chunks = gate.feed(block, _rms(block) >= self._speech_threshold())
                     if gate.just_closed:
-                        # Room went quiet: drop any half-formed hypothesis.
+                        # Room went quiet. Ask the decoder to commit first:
+                        # this is the moment it would have emitted its final
+                        # result, and resetting straight through it is what
+                        # made the committed-result rule never fire at all.
+                        if self._flush_for_wake(recognizer):
+                            gate.reset()
+                            self._handle_wake(stream)
+                            self._set_state(LISTENING)
+                            continue
                         recognizer.Reset()
                     if not chunks:
                         continue
@@ -394,11 +414,31 @@ class ServitorEar:
                     self._handle_wake(stream)
                     self._set_state(LISTENING)
 
+    def _flush_for_wake(self, recognizer) -> bool:
+        """Close the utterance and report whether the phrase was committed.
+
+        The energy gate ends an utterance by going quiet, not by handing the
+        decoder silence, so nothing else makes it commit. Without this the
+        wake phrase stays a partial forever and is then discarded by Reset.
+        """
+        heard = json.loads(recognizer.FinalResult()).get("text", "")
+        return self.config.wake_phrase in heard
+
     def _decode_for_wake(self, recognizer, chunks: list[bytes]) -> bool:
-        """Feed audio to the decoder, reporting whether the phrase appeared."""
+        """Feed audio to the decoder, reporting whether the phrase appeared.
+
+        A partial result is a hypothesis the recogniser has not committed to
+        and may still withdraw. Trusting them is what let "ok then" wake the
+        Servitor: the grammar can only emit the phrase or [unk], so a short
+        ambiguous sound briefly lands on the phrase before the decoder settles
+        on [unk]. Waiting for the committed result costs the pause at the end
+        of the phrase and removes that whole class of false wake.
+        """
         for chunk in chunks:
             if recognizer.AcceptWaveform(chunk):
                 heard = json.loads(recognizer.Result()).get("text", "")
+            elif self.config.wake_require_final:
+                continue
             else:
                 heard = json.loads(recognizer.PartialResult()).get("partial", "")
             if self.config.wake_phrase in heard:

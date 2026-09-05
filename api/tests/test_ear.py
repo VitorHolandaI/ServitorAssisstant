@@ -640,3 +640,53 @@ class SpoolRetentionTests(unittest.TestCase):
     def test_the_cap_is_configurable(self):
         with _env(EAR_SPOOL_KEEP="7"):
             self.assertEqual(EarConfig.from_env().spool_keep, 7)
+
+
+class WakeCommitTests(unittest.TestCase):
+    """A partial decode is a hypothesis, not a wake."""
+
+    class _Recognizer:
+        """Stands in for Kaldi: says whether each chunk closed an utterance."""
+
+        def __init__(self, script):
+            self.script = list(script)
+
+        def AcceptWaveform(self, chunk):  # noqa: N802 - vosk's own spelling
+            self.final, self.text = self.script.pop(0)
+            return self.final
+
+        def Result(self):  # noqa: N802
+            return json.dumps({"text": self.text})
+
+        def PartialResult(self):  # noqa: N802
+            return json.dumps({"partial": self.text})
+
+    def _ear(self, require_final: bool):
+        return ServitorEar(EarConfig(wake_phrase="hey oracle", wake_require_final=require_final))
+
+    def test_a_committed_result_wakes_the_ear(self):
+        rec = self._Recognizer([(True, "hey oracle")])
+        self.assertTrue(self._ear(True)._decode_for_wake(rec, [b"\0" * 3200]))
+
+    def test_a_partial_alone_does_not_wake_it(self):
+        # "ok then" matched the phrase as a partial and never as a final.
+        rec = self._Recognizer([(False, "hey oracle"), (True, "")])
+        self.assertFalse(self._ear(True)._decode_for_wake(rec, [b"\0" * 3200] * 2))
+
+    def test_partials_still_count_when_the_guard_is_turned_off(self):
+        rec = self._Recognizer([(False, "hey oracle")])
+        self.assertTrue(self._ear(False)._decode_for_wake(rec, [b"\0" * 3200]))
+
+    def test_unrelated_speech_never_wakes_it(self):
+        rec = self._Recognizer([(True, "[unk]"), (True, "")])
+        self.assertFalse(self._ear(True)._decode_for_wake(rec, [b"\0" * 3200] * 2))
+
+    def test_the_guard_is_configurable(self):
+        with _env(EAR_WAKE_REQUIRE_FINAL="false"):
+            self.assertFalse(EarConfig.from_env().wake_require_final)
+        with _env():
+            self.assertTrue(EarConfig.from_env().wake_require_final)
+
+    def test_a_breath_no_longer_ends_a_command(self):
+        # A pause for air is comfortably under two seconds.
+        self.assertGreaterEqual(EarConfig().silence_seconds, 2.0)
