@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,31 @@ logger = logging.getLogger(__name__)
 # tail of a long listing is rarely what was asked for, so it is cheaper to cut
 # it than to lose the whole turn.
 MAX_TOOL_RESULT_CHARS = int(os.getenv("OV_MAX_TOOL_RESULT_CHARS", "1400"))
+
+# The integrated GPU hangs under load every so often - four times in one day
+# here - and the OpenCL context dies with it. OpenVINO's own message for this
+# says any subsequent OpenCL call will hang, so the plugin "can't finish
+# correctly"; the upstream issue (openvino#25141) is closed as not planned,
+# a driver bug rather than something OpenVINO can catch.
+#
+# Python catches the RuntimeError fine. What aborts the process is releasing
+# the dead pipeline afterwards: its destructor throws a second ov::Exception,
+# and a throwing destructor is std::terminate. That turned a lost turn into
+# SIGABRT and a 4.6 GB core dump, every time:
+#
+#     [OVChat] generate failed; dropping the pipeline
+#     terminate called after throwing an instance of 'ov::Exception'
+#
+# So the pipeline is never released after a device error. The process leaves
+# immediately instead, skipping every destructor, and systemd starts a fresh
+# one in three seconds with nothing to unwind and no core to write.
+GPU_FAULTS = ("CL_OUT_OF_RESOURCES", "clFinish", "GPU HANG", "ocl_stream")
+EXIT_ON_GPU_FAULT = os.getenv("OV_EXIT_ON_GPU_FAULT", "true").strip().lower() != "false"
+
+
+def _is_device_fault(error: BaseException) -> bool:
+    text = str(error)
+    return any(marker in text for marker in GPU_FAULTS)
 
 
 def _block_text(content) -> str:
@@ -247,7 +273,14 @@ class OpenVINOChat(BaseChatModel):
             if not self.enable_thinking:
                 history.set_extra_context({"enable_thinking": False})
             reply = self._pipeline.generate(history, config)
-        except Exception:
+        except Exception as error:  # noqa: BLE001 - one bad turn must not kill the agent
+            if EXIT_ON_GPU_FAULT and _is_device_fault(error):
+                # Do not touch the pipeline: releasing it is what aborts. Leave
+                # without unwinding and let the service come back clean.
+                logger.error(f"[OVChat] the GPU died under us: {str(error)[:200]}")
+                logger.error("[OVChat] leaving now so systemd can restart us cleanly")
+                sys.stderr.flush()
+                os._exit(70)
             logger.exception("[OVChat] generate failed; dropping the pipeline")
             # NPU state can go stale after a failure. Drop it and let the next
             # call rebuild, rather than paying the rebuild on this one.
