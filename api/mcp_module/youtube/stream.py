@@ -379,7 +379,9 @@ async def play_video(number: int) -> str:
         return f"Only videos {first} to {_state.cursor} were just read out."
     video = _state.offered[position]
     # A video that opens paused has not been played.
-    if not await open_url(video.url, play=True):
+    # Deferred: this turn still holds the model on the GPU, and starting
+    # Firefox into that has hung the device.
+    if not await open_url(video.url, play=True, defer=True):
         return "No browser found on this machine."
     return f"Playing {video.title}."
 
