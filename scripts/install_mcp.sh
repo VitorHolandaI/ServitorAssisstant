@@ -14,6 +14,7 @@ MODULES=(
     mcp_module.stremable_http.stream2      # :8001 general
     mcp_module.dev_activity.stream         # :8002 dev activity
     mcp_module.nextcloud_slim.stream       # :8003 nextcloud, slim
+    mcp_module.desktop.stream              # :8004 dictation into the focused window
 )
 
 mkdir -p "$UNIT_DIR"

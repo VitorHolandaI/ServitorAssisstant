@@ -23,7 +23,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-
 from mcp_module.stremable_http.nextcloud_tasks import (
     NextcloudError,
     NextcloudTasksClient,

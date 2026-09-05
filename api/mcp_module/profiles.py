@@ -11,6 +11,11 @@ the server wants. `local` is the spoken subset: read-mostly, no destructive
 verbs, and no Wake-on-LAN, because a wake packet should not be one misheard
 word away.
 
+The one tool here that acts rather than reports is
+`type_into_focused_window`, which is the point of it - dictation only works
+if the words reach the window. It types wherever the cursor is, so what is
+focused when you speak is what receives it.
+
 Names that a profile lists but no server offers are reported rather than
 ignored - a typo in a profile would otherwise silently shrink the agent.
 """
@@ -42,6 +47,8 @@ LOCAL_TOOLS = frozenset({
     "nextcloud_finish_task",
     # dev activity
     "summarize_weekly_dev_activity",
+    # dictation into the focused window
+    "type_into_focused_window",
 })
 
 # None means "no allow-list": take whatever the servers offer.
