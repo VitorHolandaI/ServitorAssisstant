@@ -16,6 +16,7 @@ import datetime as dt
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
 from xml.etree import ElementTree  # nosec B405 - payload is guarded in _parse
 
@@ -118,27 +119,55 @@ def _parse(payload: bytes) -> list[Video]:
     return videos
 
 
+# 364 subscriptions is an ordinary number, and fetching them one after another
+# takes minutes. Spoken answers cannot wait that long, and these are small
+# HTTPS GETs that spend nearly all their time waiting.
+FEED_WORKERS = int(os.getenv("YOUTUBE_FEED_WORKERS", "16"))
+FEED_TIMEOUT = float(os.getenv("YOUTUBE_FEED_TIMEOUT", "10"))
+# Only the newest videos are ever read out, so old channels do not have to be
+# waited on. Whatever has not arrived by now is left out of this answer.
+FETCH_BUDGET = float(os.getenv("YOUTUBE_FETCH_BUDGET", "25"))
+
+
 def _fetch_all(channel_ids: list[str]) -> list[Video]:
-    """Fetch every feed, skipping the ones that fail.
+    """Fetch every feed in parallel, skipping the ones that fail or are slow.
 
     One unreachable channel must not silence the whole list - the point of
     asking is to hear what is new, not to hear about a 404.
     """
     import requests
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     session = requests.Session()
     session.headers["User-Agent"] = "Mozilla/5.0 (X11; Linux x86_64; rv:154.0) Gecko/20100101 Firefox/154.0"
-    videos: list[Video] = []
-    for channel_id in channel_ids:
+    adapter = requests.adapters.HTTPAdapter(pool_connections=FEED_WORKERS, pool_maxsize=FEED_WORKERS)
+    session.mount("https://", adapter)
+
+    def one(channel_id: str) -> list[Video]:
         try:
-            response = session.get(FEED_URL.format(channel_id=channel_id), timeout=15)
-            if response.status_code == 200:
-                videos.extend(_parse(response.content))
-            else:
-                logger.warning(f"[YouTube] {channel_id} returned {response.status_code}")
+            response = session.get(FEED_URL.format(channel_id=channel_id), timeout=FEED_TIMEOUT)
         except Exception as error:  # noqa: BLE001 - one bad feed, not a bad answer
             logger.warning(f"[YouTube] {channel_id} failed: {error}")
+            return []
+        if response.status_code != 200:
+            logger.warning(f"[YouTube] {channel_id} returned {response.status_code}")
+            return []
+        return _parse(response.content)
+
+    videos: list[Video] = []
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=FEED_WORKERS) as pool:
+        futures = {pool.submit(one, channel_id): channel_id for channel_id in channel_ids}
+        for future in as_completed(futures, timeout=None):
+            videos.extend(future.result())
+            if time.monotonic() - started > FETCH_BUDGET:
+                logger.warning(f"[YouTube] stopped fetching after {FETCH_BUDGET:.0f}s")
+                for pending in futures:
+                    pending.cancel()
+                break
     videos.sort(key=lambda video: video.published, reverse=True)
+    logger.info(f"[YouTube] {len(videos)} videos from {len(channel_ids)} channels "
+                f"in {time.monotonic() - started:.1f}s")
     return videos
 
 

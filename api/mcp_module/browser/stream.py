@@ -63,11 +63,15 @@ async def _open(url: str) -> str:
 
 @mcp.tool()
 async def open_website(target: str) -> str:
-    """Open a site in the browser, or search the web for it.
+    """Open a site, or search the web. This is the default for searching.
 
-    `target` is an address like "youtube.com" or a thing to look up like
-    "opening hours of the museum". Use it whenever the user asks to open,
-    go to, visit, or look something up on the web.
+    `target` is an address like "wikipedia.org" or a thing to look up like
+    "opening hours of the museum".
+
+    Use this for ANY search unless the user actually named YouTube. "Search
+    for X", "look up X", "find X", "google X" and "search Firefox for X" all
+    belong here - naming the browser says where to search, not what site to
+    search on.
     """
     target = (target or "").strip()
     if not target:
@@ -90,10 +94,11 @@ async def open_website(target: str) -> str:
 
 @mcp.tool()
 async def search_youtube(query: str) -> str:
-    """Open YouTube search results for something to watch.
+    """Search YouTube. Only when the user said YouTube, or asked to watch.
 
-    Use when the user asks to watch, find or look for a video, a song, a
-    channel or a topic on YouTube.
+    Requires the user to have named YouTube, or to have asked for a video to
+    watch. A plain "search for X" is a web search and belongs to
+    open_website, even when X happens to be something that exists on YouTube.
     """
     query = (query or "").strip()
     if not query:
@@ -104,11 +109,11 @@ async def search_youtube(query: str) -> str:
 
 @mcp.tool()
 async def search_youtube_music(query: str) -> str:
-    """Open YouTube Music for a song, an album or a musician.
+    """Search YouTube Music. Only when the user asked to play or hear music.
 
-    Use when the user asks for music by name - "put on <artist>", "play the
-    <album> album", "find <song>" - rather than for a video to watch, which
-    is search_youtube.
+    For "put on <artist>", "play the <album> album", "I want to listen to
+    <song>". Not for a plain search, and not for a video to watch, which is
+    search_youtube.
     """
     query = (query or "").strip()
     if not query:
