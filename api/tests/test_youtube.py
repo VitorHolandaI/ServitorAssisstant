@@ -17,6 +17,7 @@ from mcp_module.youtube.stream import (  # noqa: E402
     _ago,
     _parse,
     _recent,
+    _shorten,
     _speak,
     _window_label,
 )
@@ -196,3 +197,26 @@ class SpokenChoiceTests(unittest.TestCase):
     def test_portuguese_numbers_are_understood(self):
         self.assertEqual(_understand("quero o 5"), ("play", 5))
         self.assertEqual(_understand("toca o dois"), ("play", 2))
+
+
+class SpokenTitleTests(unittest.TestCase):
+    """A title has to be sayable: three real ones took 37 seconds to read."""
+
+    def test_a_short_title_is_untouched(self):
+        self.assertEqual(_shorten("Acorn Archimedes A420"), "Acorn Archimedes A420")
+
+    def test_channel_branding_after_a_pipe_is_dropped(self):
+        self.assertEqual(_shorten("Real title | Cortes do Francisco"), "Real title")
+
+    def test_a_long_title_is_cut_on_a_word_boundary(self):
+        title = "VIRGINIA PAROU COM AS BETS E ARRUMOU OUTRO JEITO DE TIRAR DINHEIRO DOS POBRES"
+        spoken = _shorten(title)
+        self.assertLessEqual(len(spoken), 64)
+        self.assertTrue(spoken.endswith("..."))
+        self.assertFalse(spoken[:-3].endswith(" "))
+
+    def test_whitespace_is_collapsed(self):
+        self.assertEqual(_shorten("two   spaces\nhere"), "two spaces here")
+
+    def test_a_title_that_is_only_branding_still_says_something(self):
+        self.assertTrue(_shorten(" | Channel"))

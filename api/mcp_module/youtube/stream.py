@@ -93,6 +93,7 @@ class _Feed:
         self.prewarmed: list[Video] | None = None
         self.prewarmed_at = 0.0
         self.refresher: asyncio.Task | None = None
+        self.lock = asyncio.Lock()
 
 
 _state = _Feed()
@@ -230,21 +231,44 @@ def _drop_shorts(videos: list[Video]) -> list[Video]:
 
 
 async def _videos(force: bool = False) -> list[Video]:
-    now = asyncio.get_running_loop().time()
-    if not force and _state.videos and (now - _state.fetched_at) < CACHE_SECONDS:
+    """The merged feed, fetched at most once at a time.
+
+    The background refresher and a live request both want this, and without
+    the lock they both fetched all 364 channels - the logs showed every fetch
+    and every Shorts probe happening twice, for one question.
+    """
+    async with _state.lock:
+        now = asyncio.get_running_loop().time()
+        if not force and _state.videos and (now - _state.fetched_at) < CACHE_SECONDS:
+            return _state.videos
+        followed = [channel_id for channel_id, _ in channel_store.load()]
+        if not followed:
+            return []
+        # requests is blocking and there may be dozens of feeds.
+        _state.videos = await asyncio.to_thread(_fetch_all, followed)
+        _state.fetched_at = now
         return _state.videos
-    followed = [channel_id for channel_id, _ in channel_store.load()]
-    if not followed:
-        return []
-    # requests is blocking and there may be dozens of feeds.
-    _state.videos = await asyncio.to_thread(_fetch_all, followed)
-    _state.fetched_at = now
-    return _state.videos
+
+
+# A YouTube title runs to a hundred characters of capitals and channel
+# branding. Three of them read aloud took 37 seconds, and the listener was
+# only given six to answer in - the question outlasted the patience for it.
+SPOKEN_TITLE_CHARS = int(os.getenv("YOUTUBE_SPOKEN_TITLE_CHARS", "60"))
+
+
+def _shorten(title: str) -> str:
+    title = " ".join(title.split())
+    # Titles are often "Real title | Channel branding"; the tail is not the name.
+    head = title.split(" | ")[0].strip() or title
+    if len(head) <= SPOKEN_TITLE_CHARS:
+        return head
+    cut = head[:SPOKEN_TITLE_CHARS].rsplit(" ", 1)[0]
+    return f"{cut}..."
 
 
 def _speak(batch: list[Video], start: int) -> str:
     lines = [
-        f"Video {index}: {video.title}, from {video.channel}, {_ago(video.published)}."
+        f"Video {index}: {_shorten(video.title)}, from {video.channel}, {_ago(video.published)}."
         for index, video in enumerate(batch, start=start + 1)
     ]
     return " ".join(lines)
@@ -386,6 +410,66 @@ async def play_video(number: int) -> str:
     return f"Playing {video.title}."
 
 
+# Words that carry no signal when matching a description to a title.
+_NOISE = {
+    "a", "an", "the", "about", "on", "in", "of", "for", "that", "this",
+    "video", "one", "there", "is", "was", "with", "and", "to", "from",
+    "um", "uma", "o", "os", "as", "de", "do", "da", "sobre", "que",
+    "aquele", "aquela", "video", "videos", "com", "e", "para",
+}
+
+
+def _keywords(text: str) -> set[str]:
+    words = re.findall(r"\w+", (text or "").lower(), re.UNICODE)
+    return {w for w in words if len(w) > 2 and w not in _NOISE}
+
+
+def _score(video: Video, wanted: set[str]) -> int:
+    """How much of the description this video accounts for.
+
+    Deliberately plain word overlap. A description spoken aloud - "the one
+    about the printer" - shares words with the title or it does not, and a
+    similarity model would be another 600 MB resident for a set of ten.
+    """
+    haystack = _keywords(f"{video.title} {video.channel}")
+    return len(wanted & haystack)
+
+
+@mcp.tool()
+async def play_from_subscriptions(description: str, among: int = 10) -> str:
+    """Find and play a recent subscription video from a description of it.
+
+    Use when the user describes what they want to watch rather than choosing
+    from a list - "there is a video about the new printer", "play the one
+    about Gemini". Searches only the newest videos from channels they follow,
+    not YouTube at large.
+
+    `description` is what the video is about, without the words asking for it.
+    """
+    wanted = _keywords(description)
+    if not wanted:
+        return "What is the video about?"
+    videos = await _videos()
+    if not videos:
+        return "No channels are being followed yet."
+    window = _recent(videos, DEFAULT_AGE_HOURS) or videos
+    if SKIP_SHORTS and _state.prewarmed is not None:
+        window = _state.prewarmed
+    recent = window[: max(1, min(int(among), 50))]
+
+    ranked = sorted(((_score(v, wanted), i, v) for i, v in enumerate(recent)),
+                    key=lambda item: (-item[0], item[1]))
+    best, _, video = ranked[0]
+    if best == 0:
+        titles = ", ".join(_shorten(v.title) for v in recent[:3])
+        return (f"Nothing in your {len(recent)} newest videos matches that. "
+                f"The newest are: {titles}.")
+    if not await open_url(video.url, play=True, defer=True):
+        return "No browser found on this machine."
+    logger.info(f"[YouTube] matched {best} word(s) of {sorted(wanted)}: {video.title!r}")
+    return f"Playing {_shorten(video.title)}, from {video.channel}."
+
+
 @mcp.tool()
 async def follow_channel(target: str) -> str:
     """Follow a YouTube channel so its videos appear in the list.
@@ -463,6 +547,11 @@ async def browse_subscriptions(ctx: Context, since_hours: float = 0) -> str:
     Prefer this over list_new_videos when the user wants to browse: it reads
     three, asks which one, and keeps going until they pick or stop - without
     handing control back between each step.
+
+    When this returns, the browsing is finished. Report what it says and stop
+    - do not call it again in the same turn. It asked the user directly, and
+    calling it again asks them the same thing over, which is what happened
+    when its result was read as a failure to do anything.
     """
     page = await _page(reset=True, hours=since_hours or None)
     if not _state.window:
@@ -475,18 +564,18 @@ async def browse_subscriptions(ctx: Context, since_hours: float = 0) -> str:
             logger.info("[YouTube] the client cannot ask the user; listing instead")
             return page
         if result.action != "accept" or result.data is None:
-            return "Stopped."
+            return "The user chose not to watch anything. Browsing is finished."
 
         action, number = _understand(result.data.answer)
         if action == "stop":
-            return "Stopped."
+            return "The user chose not to watch anything. Browsing is finished."
         if action == "play":
             return await play_video(number)
         if action == "more":
             page = await _page(reset=False)
             continue
         page = "I did not catch that. Say a video number, or more, or stop."
-    return "Stopped."
+    return "The user chose not to watch anything. Browsing is finished."
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -499,5 +588,5 @@ async def healthz(_request):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
-    logger.info(f"[YouTube] serving 6 tools on http://{MCP_HOST}:{MCP_PORT}/mcp")
+    logger.info(f"[YouTube] serving 7 tools on http://{MCP_HOST}:{MCP_PORT}/mcp")
     mcp.run(transport="streamable-http")

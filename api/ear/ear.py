@@ -551,6 +551,12 @@ class ServitorEar:
                 # A responder may answer with plain text or with a Reply carrying
                 # the language it should be spoken in.
                 text = getattr(reply, "text", reply)
+                if getattr(reply, "end_conversation", False):
+                    logger.info("[Ear] asked to stop; closing the conversation")
+                    self._set_turn(getattr(reply, "heard", ""), "")
+                    if text:
+                        self._speak_text(text, getattr(reply, "language", None))
+                    return
                 self._set_turn(getattr(reply, "heard", ""), str(text))
                 self._speak_text(text, getattr(reply, "language", None))
 
@@ -563,6 +569,12 @@ class ServitorEar:
         finally:
             # A tool may only ask the user something inside a turn.
             self._active_stream = None
+            # The conversation is over. What was said in it does not carry
+            # into the next wake: the assistant is asked to forget it here
+            # rather than deciding for itself when a conversation ended.
+            forget = getattr(self.responder, "forget", None)
+            if forget is not None:
+                forget()
 
     def ask_user(self, question: str) -> bytes | None:
         """Speak a question mid-turn and record the answer.

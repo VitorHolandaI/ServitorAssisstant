@@ -31,6 +31,7 @@ from ear.ear import (  # noqa: E402
     _to_wav,
 )
 from ear.brain import LocalBrain  # noqa: E402
+from ear.stop_words import is_stop_phrase  # noqa: E402
 from ear.devices import (  # noqa: E402
     connected_displays,
     fits_on_shared_gpu,
@@ -777,3 +778,86 @@ class FollowUpTurnTests(unittest.TestCase):
             config = EarConfig.from_env()
             self.assertEqual(config.followup_seconds, 0.0)
             self.assertEqual(config.followup_turns, 9)
+
+
+class ConversationMemoryTests(unittest.TestCase):
+    """What is said to the Servitor should not outlive the wake that started it."""
+
+    class _Brain:
+        def __init__(self):
+            self.forgotten = 0
+
+        def reset(self):
+            self.forgotten += 1
+
+    def _ear(self, responder):
+        import tempfile
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ear = ServitorEar(EarConfig(spool_dir=Path(tmp.name)), responder=responder)
+        ear._speak_wav = lambda *a, **k: None
+        ear._speak_text = lambda *a, **k: None
+        ear._ack_audio = lambda: b""
+        ear._drain = lambda stream: None
+        ear._record_command = lambda stream, lead_in_seconds=None: None
+        return ear
+
+    def test_the_conversation_is_forgotten_when_the_turn_ends(self):
+        forgotten = []
+
+        class Responder:
+            def __call__(self, wav):
+                return None
+
+            def forget(self):
+                forgotten.append(1)
+
+        ear = self._ear(Responder())
+        ear._handle_wake(object())
+        self.assertEqual(len(forgotten), 1)
+
+    def test_a_responder_with_no_memory_is_not_an_error(self):
+        ear = self._ear(lambda wav: None)
+        ear._handle_wake(object())  # must not raise
+
+    def test_the_assistant_forgets_by_resetting_its_brain(self):
+        from ear.assistant import LocalAssistant
+
+        assistant = LocalAssistant.__new__(LocalAssistant)
+        assistant.brain = self._Brain()
+        assistant.forget()
+        self.assertEqual(assistant.brain.forgotten, 1)
+
+
+class StopPhraseTests(unittest.TestCase):
+    """Being asked to stop must not depend on the model agreeing to stop."""
+
+    def test_a_bare_stop_is_a_stop(self):
+        for said in ("Stop.", "para", "chega", "nevermind", "no thanks"):
+            self.assertTrue(is_stop_phrase(said), said)
+
+    def test_repeating_it_is_still_a_stop(self):
+        # Exactly what was said, and answered with "I will stop listening".
+        self.assertTrue(is_stop_phrase("stop stop listening"))
+
+    def test_filler_around_it_does_not_hide_it(self):
+        self.assertTrue(is_stop_phrase("ok stop please"))
+
+    def test_a_command_containing_stop_is_not_a_stop(self):
+        self.assertFalse(is_stop_phrase("stop the timer at 5 minutes"))
+
+    def test_an_ordinary_request_is_not_a_stop(self):
+        for said in ("what is the weather", "play video two", "list my subscriptions"):
+            self.assertFalse(is_stop_phrase(said), said)
+
+    def test_a_mistranscription_is_not_assumed_to_be_a_stop(self):
+        # "Stop body" was heard once; the second word means nothing here.
+        self.assertFalse(is_stop_phrase("Stop body"))
+
+    def test_silence_is_not_a_stop_phrase(self):
+        self.assertFalse(is_stop_phrase(""))
+        self.assertFalse(is_stop_phrase("   "))
+
+    def test_a_long_utterance_is_never_a_stop(self):
+        self.assertFalse(is_stop_phrase("stop stop stop stop stop"))

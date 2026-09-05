@@ -129,8 +129,6 @@ class llm_mcp_client:
             do_sample=False,
         )
         self._usage_turn_open = False
-        self._stack: contextlib.AsyncExitStack | None = None
-        self._agent = None
         self._tools_by_name = {}
         # Exact prompt/response token counts reported by Ollama on the last LLM
         # call of the last turn. Authoritative — it is the model's own count.
@@ -157,15 +155,27 @@ class llm_mcp_client:
             "model": self.model_name,
         }
 
-    async def _ensure_agent(self):
-        if self._agent is not None:
-            return
-        # Keep the MCP session stack alive across LLM reloads.
-        if self._stack is None:
-            self._stack = contextlib.AsyncExitStack()
-            clients = [await self._stack.enter_async_context(_open_endpoint(addr)) for addr in self.mcp_addresses]
+    @contextlib.asynccontextmanager
+    async def _session(self):
+        """Open the MCP sessions, build the agent, and close it all after.
+
+        Opened per call rather than kept alive. The sessions were shared
+        across turns until an anyio cancel scope was entered on one task and
+        exited on another - each turn arrives on a fresh task, since the ear
+        submits it with run_coroutine_threadsafe - and the teardown raised
+        "Attempted to exit cancel scope in a different task". A stale stack
+        was never rebuilt either, so restarting the MCP host left every later
+        turn answering "something went wrong reaching my tools".
+
+        Reconnecting costs 0.14s for seven servers and fifty tools, measured,
+        against turns of ten seconds and up. Owning the sessions for exactly
+        one task is worth more than saving that.
+        """
+        async with contextlib.AsyncExitStack() as stack:
+            clients = [await stack.enter_async_context(_open_endpoint(addr))
+                       for addr in self.mcp_addresses]
             sessions = [
-                await self._stack.enter_async_context(
+                await stack.enter_async_context(
                     ClientSession(read, write, elicitation_callback=self._elicitation_callback())
                 )
                 for read, write, _ in clients
@@ -173,13 +183,16 @@ class llm_mcp_client:
             all_tools = []
             for session in sessions:
                 await session.initialize()
-                tools = await load_mcp_tools(session)
-                all_tools.extend(tools)
-            logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
+                all_tools.extend(await load_mcp_tools(session))
             self._tools_by_name = {tool.name: tool for tool in all_tools}
+            chosen = select_tools(all_tools, self.profile)
+            logger.debug(f"[client2] {len(chosen)} of {len(all_tools)} tools")
+            yield create_react_agent(self._llm, chosen)
 
-        all_tools = select_tools(list(self._tools_by_name.values()), self.profile)
-        self._agent = create_react_agent(self._llm, all_tools)
+    async def probe(self):
+        """Open the sessions once to check the servers answer, then let go."""
+        async with self._session():
+            logger.info(f"[client2] {len(self._tools_by_name)} tools reachable")
 
     def _elicitation_callback(self):
         """Route a tool's question to the user, if anyone can be asked."""
@@ -226,40 +239,28 @@ class llm_mcp_client:
             return str(result["result"])
         return str(result)
 
-    async def _recreate_agent(self):
-        await self.cleanup()
-        self._agent = None
-        await self._ensure_agent()
-
     async def cleanup(self):
-        if self._stack:
-            await self._stack.aclose()
-            self._stack = None
-        self._agent = None
+        """Nothing to tear down: a session lives and dies with its turn."""
         self._tools_by_name = {}
-        self._llm.unload()
 
     def unload(self) -> None:
-        """Free the LLM from accelerator memory. Keeps MCP connections alive."""
+        """Free the LLM from accelerator memory."""
         self._llm.unload()
-        # Recreate the agent on next call so it picks up the fresh LLM.
-        # The MCP session stack stays alive — only the LangGraph graph is dropped.
-        self._agent = None
 
     async def get_response(self, message, history=None, system_prompt=None):
         logger.info(f"[client2] get_response: {message[:80]!r}")
         try:
-            await self._ensure_agent()
-            direct_result = await self._try_direct_tool(message)
-            if direct_result is not None:
-                return {"messages": [AIMessage(content=direct_result)]}
-            prompt = system_prompt or self.prompt
-            msgs = _build_messages(message, history, prompt)
-            # A tool may pause to ask the user something; that wait is legitimate.
-            response = await asyncio.wait_for(
-                self._agent.ainvoke({"messages": msgs}),
-                timeout=float(os.getenv("MCP_AGENT_TIMEOUT", "600")),
-            )
+            async with self._session() as agent:
+                direct_result = await self._try_direct_tool(message)
+                if direct_result is not None:
+                    return {"messages": [AIMessage(content=direct_result)]}
+                prompt = system_prompt or self.prompt
+                msgs = _build_messages(message, history, prompt)
+                # A tool may pause to ask the user something; that wait is legitimate.
+                response = await asyncio.wait_for(
+                    agent.ainvoke({"messages": msgs}),
+                    timeout=float(os.getenv("MCP_AGENT_TIMEOUT", "600")),
+                )
 
             tool_calls_used = []
             self.last_usage = None
@@ -274,53 +275,51 @@ class llm_mcp_client:
             return response
         except Exception as error:
             logger.error(f"[client2] get_response error: {error}", exc_info=DEBUG)
-            await self._recreate_agent()
             return None
 
     async def get_response_stream(self, message, history=None, system_prompt=None):
         logger.info(f"[client2] get_response_stream: {message[:80]!r}")
         try:
-            await self._ensure_agent()
-            direct_result = await self._try_direct_tool(message)
-            if direct_result is not None:
-                yield direct_result
-                return
-            prompt = system_prompt or self.prompt
-            msgs = _build_messages(message, history, prompt)
-            in_tool_call = False
-            self.last_usage = None
-            self._usage_turn_open = True
-            async for event in self._agent.astream_events({"messages": msgs}, version="v2"):
-                event_type = event["event"]
+            async with self._session() as agent:
+                direct_result = await self._try_direct_tool(message)
+                if direct_result is not None:
+                    yield direct_result
+                    return
+                prompt = system_prompt or self.prompt
+                msgs = _build_messages(message, history, prompt)
+                in_tool_call = False
+                self.last_usage = None
+                self._usage_turn_open = True
+                async for event in agent.astream_events({"messages": msgs}, version="v2"):
+                    event_type = event["event"]
 
-                if event_type == "on_chat_model_stream":
-                    chunk = event["data"].get("chunk")
-                    if not chunk or not hasattr(chunk, "content") or not chunk.content:
-                        continue
-                    if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
-                        in_tool_call = True
-                        continue
-                    if in_tool_call:
-                        continue
-                    logger.debug(f"[client2] yielding {len(chunk.content)} chars")
-                    yield chunk.content
+                    if event_type == "on_chat_model_stream":
+                        chunk = event["data"].get("chunk")
+                        if not chunk or not hasattr(chunk, "content") or not chunk.content:
+                            continue
+                        if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
+                            in_tool_call = True
+                            continue
+                        if in_tool_call:
+                            continue
+                        logger.debug(f"[client2] yielding {len(chunk.content)} chars")
+                        yield chunk.content
 
-                elif event_type == "on_chat_model_end":
-                    in_tool_call = False
-                    output = event["data"].get("output")
-                    if output is not None:
-                        self._record_usage(output)
+                    elif event_type == "on_chat_model_end":
+                        in_tool_call = False
+                        output = event["data"].get("output")
+                        if output is not None:
+                            self._record_usage(output)
 
-                elif event_type == "on_tool_start":
-                    logger.info(f"[client2] tool call: {event.get('name')}")
+                    elif event_type == "on_tool_start":
+                        logger.info(f"[client2] tool call: {event.get('name')}")
 
-                elif event_type == "on_tool_end":
-                    logger.info(f"[client2] tool done: {event.get('name')}")
-                    in_tool_call = False
+                    elif event_type == "on_tool_end":
+                        logger.info(f"[client2] tool done: {event.get('name')}")
+                        in_tool_call = False
 
         except Exception as error:
             logger.error(f"[client2] stream error: {error}", exc_info=DEBUG)
-            await self._recreate_agent()
             raise
         finally:
             self._usage_turn_open = False

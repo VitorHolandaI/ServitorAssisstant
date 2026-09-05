@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ear.brain import LocalBrain, ServerBrain
 from ear.devices import guard_device
+from ear.stop_words import is_stop_phrase
 from ear.ear import EarConfig
 from ear.transcribe import OpenVinoWhisper
 
@@ -26,6 +27,9 @@ class Reply:
     text: str
     language: str = "en"
     heard: str = ""
+    # Set when the user asked to be left alone. The ear closes the
+    # conversation on it rather than waiting for the model to agree.
+    end_conversation: bool = False
 
 
 def _brain_for(config: EarConfig):
@@ -82,6 +86,10 @@ class LocalAssistant:
         logger.info(f"[Assistant] answered [{heard.language}]: {heard.text!r}")
         return heard.text
 
+    def forget(self) -> None:
+        """Drop the conversation once the wake session that held it ends."""
+        self.brain.reset()
+
     def tick(self) -> None:
         """Called from the listening loop; drops the LLM once talk has stopped.
 
@@ -99,6 +107,11 @@ class LocalAssistant:
             return None
         if self.on_heard is not None:
             self.on_heard(heard.text)
+        if is_stop_phrase(heard.text):
+            # Decided before the model is consulted. Asked to stop, it
+            # answered "I will stop listening" and kept the microphone open.
+            logger.info(f"[Assistant] asked to stop: {heard.text!r}")
+            return Reply("", heard.language, heard.text, end_conversation=True)
         # Whisper already decided what language this was; telling the model
         # beats asking it to notice, which it does not reliably do.
         answer = self.brain.answer(heard.text, heard.language)
