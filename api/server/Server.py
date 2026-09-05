@@ -29,11 +29,23 @@ MAX_HISTORY_CHARS = 80_000
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 voice_path = os.getenv("VOICE_PATH")
 server_ip = os.getenv("SERVER_IP", "localhost")
-MCP_ADDRESS = f"http://{server_ip}:8001/mcp"
+# SERVER_IP still names the box for everything else. MCP_ADDRESS overrides it
+# for the general MCP alone, so this laptop can talk to its own copy without
+# repointing the rest of the config at itself.
+MCP_ADDRESS = os.getenv("MCP_ADDRESS", "").strip() or f"http://{server_ip}:8001/mcp"
 MCP_EXTRA_ADDRESSES = [
     addr.strip() for addr in os.getenv("MCP_EXTRA_ADDRESSES", "").split(",") if addr.strip()
 ]
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+
+# Local OpenVINO model (no Ollama). Default: same Qwen3 the ear uses.
+_repo_root = Path(__file__).parent.parent.parent
+ov_model = os.getenv("OV_MODEL_PATH", "").strip()
+if ov_model:
+    ov_model = str((Path(ov_model).expanduser() if Path(ov_model).is_absolute()
+                     else _repo_root / Path(ov_model)).resolve())
+else:
+    ov_model = str(_repo_root / "voice_models" / "qwen3-4b-int4-ov")
 
 logging.basicConfig(
     level=logging.DEBUG if DEBUG else logging.INFO,
@@ -162,6 +174,12 @@ class ServitorServer:
             "exposed as 'lampEscritorip' in the area 'escritorio'. "
             "Never claim a device was turned on, turned off or changed unless the tool "
             "returned success in the current request, and never invent device names. "
+            "For current power, battery charge, energy meter values, consumption, generation, "
+            "or Energy dashboard source IDs, ALWAYS call get_home_assistant_energy_state. "
+            "For historical consumption, generation, cost, or comparisons over time, ALWAYS "
+            "call get_home_assistant_energy_summary first. Use get_home_assistant_energy_history "
+            "only when the user needs the period-by-period series for one configured statistic. "
+            "These three energy tools are read-only and must never be replaced by a guessed value. "
             "The Home Assistant list tools (todo_get_items, HassListAddItem, "
             "HassListCompleteItem, HassListRemoveItem) manage shopping lists inside the house "
             "and are NOT the user's tasks. Never use them for tasks, reminders, agenda or "
@@ -175,11 +193,10 @@ class ServitorServer:
             "Never use numeric clock formats like '18:00' or '20:30'."
         )
 
-        ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         agent_mcp = llm_mcp_client(
             mcp_addresses=MCP_ENDPOINTS,
-            model_name="gemma4:e2b-it-qat",
-            model_address=ollama_host,
+            model_name="",
+            model_address=ov_model,
             system_prompt=self.base_prompt
         )
         self.agent = agent_mcp
@@ -226,7 +243,10 @@ class ServitorServer:
     async def process_ollama(self, talk: str, session_id: int | None = None):
         logger.info(f"[Server] process_ollama: {talk[:80]!r}")
         history = self._load_history(session_id)
-        response = await self.agent.get_response(talk, history=history, system_prompt=self.get_prompt_with_time())
+        try:
+            response = await self.agent.get_response(talk, history=history, system_prompt=self.get_prompt_with_time())
+        finally:
+            self.agent.unload()
 
         if response is None:
             logger.error("[Server] agent returned None")

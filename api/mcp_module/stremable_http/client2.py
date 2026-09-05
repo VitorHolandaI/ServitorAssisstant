@@ -6,12 +6,12 @@ import re
 from dataclasses import dataclass, field
 
 import httpx
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_mcp_adapters.tools import load_mcp_tools
-from langchain_ollama import ChatOllama
 from langgraph.prebuilt import create_react_agent
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from mcp_module.profiles import DEFAULT_PROFILE, select_tools
 
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 logger = logging.getLogger(__name__)
@@ -97,15 +97,33 @@ def _is_explicit_nextcloud_completion(message: str) -> bool:
     )
 
 
-class llm_mcp_client():
-    def __init__(self, mcp_addresses: list, model_name: str, model_address: str, system_prompt: str):
+class llm_mcp_client:
+    def __init__(self, mcp_addresses: list, model_name: str, model_address: str, system_prompt: str,
+                 profile: str | None = None):
         self.mcp_addresses = mcp_addresses
+        # Which tools this agent may see. The server takes them all; the
+        # laptop takes the spoken subset, which is smaller context for a
+        # smaller model and a narrower blast radius for a misheard sentence.
+        self.profile = profile or os.getenv("MCP_PROFILE", DEFAULT_PROFILE)
         self.model_name = model_name
         self.model_address = model_address
         self.prompt = system_prompt
         self.context_window = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
         self.context_reserved_tokens = 5000
-        self._llm = ChatOllama(model=self.model_name, base_url=self.model_address, keep_alive="10m", timeout=120, num_ctx=self.context_window, model_kwargs={"think": False})
+        # Local OpenVINO model — no Ollama, no network. The device is only a
+        # request: ov_chat re-checks it against the display and the driver's
+        # allocation ceiling before anything is compiled.
+        from mcp_module.stremable_http.ov_chat import OpenVINOChat
+        self._llm = OpenVINOChat(
+            model_path=model_address,
+            device=os.getenv("OV_AGENT_DEVICE", "GPU").strip().upper(),
+            # A ReAct turn has to fit a <tool_call> block and then the answer.
+            # At 128 a call with a few arguments is truncated mid-JSON and is
+            # dropped by the parser, so the agent looks like it ignored its tools.
+            max_tokens=int(os.getenv("OV_AGENT_MAX_TOKENS", "512")),
+            temperature=0.0,
+            do_sample=False,
+        )
         self._usage_turn_open = False
         self._stack: contextlib.AsyncExitStack | None = None
         self._agent = None
@@ -113,7 +131,7 @@ class llm_mcp_client():
         # Exact prompt/response token counts reported by Ollama on the last LLM
         # call of the last turn. Authoritative — it is the model's own count.
         self.last_usage: dict | None = None
-        logger.info(f"[client2] init model={model_name} mcp={mcp_addresses}")
+        logger.info(f"[client2] init model={model_name} profile={self.profile} mcp={mcp_addresses}")
 
     def _record_usage(self, message) -> None:
         """Store token usage from an AIMessage, if the provider reported any."""
@@ -138,18 +156,20 @@ class llm_mcp_client():
     async def _ensure_agent(self):
         if self._agent is not None:
             return
-        self._stack = contextlib.AsyncExitStack()
-        clients = [await self._stack.enter_async_context(_open_endpoint(addr)) for addr in self.mcp_addresses]
-        sessions = [await self._stack.enter_async_context(ClientSession(read, write)) for read, write, _ in clients]
+        # Keep the MCP session stack alive across LLM reloads.
+        if self._stack is None:
+            self._stack = contextlib.AsyncExitStack()
+            clients = [await self._stack.enter_async_context(_open_endpoint(addr)) for addr in self.mcp_addresses]
+            sessions = [await self._stack.enter_async_context(ClientSession(read, write)) for read, write, _ in clients]
+            all_tools = []
+            for session in sessions:
+                await session.initialize()
+                tools = await load_mcp_tools(session)
+                all_tools.extend(tools)
+            logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
+            self._tools_by_name = {tool.name: tool for tool in all_tools}
 
-        all_tools = []
-        for session in sessions:
-            await session.initialize()
-            tools = await load_mcp_tools(session)
-            all_tools.extend(tools)
-
-        logger.debug(f"[client2] tools loaded: {[t.name for t in all_tools]}")
-        self._tools_by_name = {tool.name: tool for tool in all_tools}
+        all_tools = select_tools(list(self._tools_by_name.values()), self.profile)
         self._agent = create_react_agent(self._llm, all_tools)
 
     async def _try_direct_tool(self, message: str) -> str | None:
@@ -185,6 +205,14 @@ class llm_mcp_client():
             self._stack = None
         self._agent = None
         self._tools_by_name = {}
+        self._llm.unload()
+
+    def unload(self) -> None:
+        """Free the LLM from accelerator memory. Keeps MCP connections alive."""
+        self._llm.unload()
+        # Recreate the agent on next call so it picks up the fresh LLM.
+        # The MCP session stack stays alive — only the LangGraph graph is dropped.
+        self._agent = None
 
     async def get_response(self, message, history=None, system_prompt=None):
         logger.info(f"[client2] get_response: {message[:80]!r}")
