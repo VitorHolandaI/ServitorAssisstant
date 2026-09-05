@@ -563,6 +563,12 @@ class ServitorEar:
         finally:
             # A tool may only ask the user something inside a turn.
             self._active_stream = None
+            # The conversation is over. What was said in it does not carry
+            # into the next wake: the assistant is asked to forget it here
+            # rather than deciding for itself when a conversation ended.
+            forget = getattr(self.responder, "forget", None)
+            if forget is not None:
+                forget()
 
     def ask_user(self, question: str) -> bytes | None:
         """Speak a question mid-turn and record the answer.

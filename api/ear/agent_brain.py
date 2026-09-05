@@ -19,6 +19,7 @@ sentence.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import os
 import threading
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = (
     "You are the Servitor, a terse voice assistant running locally on Vitor's laptop. "
     "Your reply is going to be spoken aloud, so answer in one or two short sentences. "
+    "The exception is a tool that hands you something already written to be read "
+    "out - a numbered list of choices, for instance. Repeat that back word for "
+    "word, every item of it, and do not summarise it or shorten it: the user is "
+    "choosing from it and cannot choose from what you left out. "
     "Never use markdown, bullet points, code blocks or emoji. "
     "Use a tool whenever one applies, and never say that you will check, fetch or "
     "look something up: by the time you answer the tool has already run, so state "
@@ -49,6 +54,11 @@ SYSTEM_PROMPT = (
 # answer had already been given. The rounds a browse can take are bounded on
 # the server, so this is a backstop, not the thing that ends a conversation.
 TURN_TIMEOUT = float(os.getenv("EAR_TURN_TIMEOUT", "600"))
+
+# Exchanges kept while a conversation is open. It is dropped the moment the
+# conversation ends, so nothing said to the Servitor outlives the wake that
+# started it - and the model is not carrying yesterday into today.
+HISTORY_TURNS = int(os.getenv("EAR_HISTORY_TURNS", "6"))
 
 
 class AgentBrain:
@@ -77,6 +87,10 @@ class AgentBrain:
         # Answers an MCP elicitation: a tool asking the user something in the
         # middle of its own execution. Set by the assistant that owns Whisper.
         self.ask_user = None
+        # (role, content, when) as _build_messages expects. Lives for one
+        # conversation: "play video two" is meaningless without the list that
+        # came before it, and every turn arrived with no history at all.
+        self._history: list[tuple[str, str, str]] = []
         self._client = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -120,9 +134,11 @@ class AgentBrain:
         """Open the MCP sessions and compile the model before the first wake."""
         client = self._ensure_client()
         try:
-            self._submit(client._ensure_agent(), 180.0)
+            # Sessions are opened per turn now, so warming means compiling the
+            # model and proving the servers answer - not holding a connection.
+            self._submit(client.probe(), 180.0)
             self._last_used = time.monotonic()
-            logger.info("[Agent] tools loaded and model ready")
+            logger.info("[Agent] tools reachable and model ready")
         except Exception:
             # The always-on half must survive a dead MCP server; the next turn
             # tries again rather than the daemon refusing to start.
@@ -131,9 +147,10 @@ class AgentBrain:
     def answer(self, question: str, language: str | None = None) -> str:
         client = self._ensure_client()
         prompt = SYSTEM_PROMPT + language_clause(language)
+        history = list(self._history)
         try:
             state = self._submit(
-                client.get_response(question, history=None, system_prompt=prompt),
+                client.get_response(question, history=history, system_prompt=prompt),
                 TURN_TIMEOUT,
             )
         except Exception:
@@ -150,11 +167,24 @@ class AgentBrain:
         for message in reversed(messages):
             text = getattr(message, "content", "")
             if isinstance(text, str) and text.strip():
+                self._remember(question, text.strip())
                 return text.strip()
         return ""
 
+    def _remember(self, question: str, answer: str) -> None:
+        when = dt.datetime.now().strftime("%H:%M")
+        self._history.append(("user", question, when))
+        self._history.append(("assistant", answer, when))
+        # Oldest first out, in whole exchanges, so a reply never survives the
+        # question it answered.
+        while len(self._history) > HISTORY_TURNS * 2:
+            del self._history[:2]
+
     def reset(self) -> None:
-        """Each spoken turn stands alone; there is no history to drop."""
+        """Forget the conversation. Called when the wake session ends."""
+        if self._history:
+            logger.info(f"[Agent] forgetting {len(self._history) // 2} exchange(s)")
+        self._history.clear()
 
     def unload(self) -> None:
         """Free the model, keeping the MCP sessions open."""

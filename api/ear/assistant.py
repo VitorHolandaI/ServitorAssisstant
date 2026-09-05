@@ -82,6 +82,10 @@ class LocalAssistant:
         logger.info(f"[Assistant] answered [{heard.language}]: {heard.text!r}")
         return heard.text
 
+    def forget(self) -> None:
+        """Drop the conversation once the wake session that held it ends."""
+        self.brain.reset()
+
     def tick(self) -> None:
         """Called from the listening loop; drops the LLM once talk has stopped.
 

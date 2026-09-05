@@ -777,3 +777,53 @@ class FollowUpTurnTests(unittest.TestCase):
             config = EarConfig.from_env()
             self.assertEqual(config.followup_seconds, 0.0)
             self.assertEqual(config.followup_turns, 9)
+
+
+class ConversationMemoryTests(unittest.TestCase):
+    """What is said to the Servitor should not outlive the wake that started it."""
+
+    class _Brain:
+        def __init__(self):
+            self.forgotten = 0
+
+        def reset(self):
+            self.forgotten += 1
+
+    def _ear(self, responder):
+        import tempfile
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        ear = ServitorEar(EarConfig(spool_dir=Path(tmp.name)), responder=responder)
+        ear._speak_wav = lambda *a, **k: None
+        ear._speak_text = lambda *a, **k: None
+        ear._ack_audio = lambda: b""
+        ear._drain = lambda stream: None
+        ear._record_command = lambda stream, lead_in_seconds=None: None
+        return ear
+
+    def test_the_conversation_is_forgotten_when_the_turn_ends(self):
+        forgotten = []
+
+        class Responder:
+            def __call__(self, wav):
+                return None
+
+            def forget(self):
+                forgotten.append(1)
+
+        ear = self._ear(Responder())
+        ear._handle_wake(object())
+        self.assertEqual(len(forgotten), 1)
+
+    def test_a_responder_with_no_memory_is_not_an_error(self):
+        ear = self._ear(lambda wav: None)
+        ear._handle_wake(object())  # must not raise
+
+    def test_the_assistant_forgets_by_resetting_its_brain(self):
+        from ear.assistant import LocalAssistant
+
+        assistant = LocalAssistant.__new__(LocalAssistant)
+        assistant.brain = self._Brain()
+        assistant.forget()
+        self.assertEqual(assistant.brain.forgotten, 1)

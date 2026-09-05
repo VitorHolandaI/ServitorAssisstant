@@ -93,6 +93,7 @@ class _Feed:
         self.prewarmed: list[Video] | None = None
         self.prewarmed_at = 0.0
         self.refresher: asyncio.Task | None = None
+        self.lock = asyncio.Lock()
 
 
 _state = _Feed()
@@ -230,21 +231,44 @@ def _drop_shorts(videos: list[Video]) -> list[Video]:
 
 
 async def _videos(force: bool = False) -> list[Video]:
-    now = asyncio.get_running_loop().time()
-    if not force and _state.videos and (now - _state.fetched_at) < CACHE_SECONDS:
+    """The merged feed, fetched at most once at a time.
+
+    The background refresher and a live request both want this, and without
+    the lock they both fetched all 364 channels - the logs showed every fetch
+    and every Shorts probe happening twice, for one question.
+    """
+    async with _state.lock:
+        now = asyncio.get_running_loop().time()
+        if not force and _state.videos and (now - _state.fetched_at) < CACHE_SECONDS:
+            return _state.videos
+        followed = [channel_id for channel_id, _ in channel_store.load()]
+        if not followed:
+            return []
+        # requests is blocking and there may be dozens of feeds.
+        _state.videos = await asyncio.to_thread(_fetch_all, followed)
+        _state.fetched_at = now
         return _state.videos
-    followed = [channel_id for channel_id, _ in channel_store.load()]
-    if not followed:
-        return []
-    # requests is blocking and there may be dozens of feeds.
-    _state.videos = await asyncio.to_thread(_fetch_all, followed)
-    _state.fetched_at = now
-    return _state.videos
+
+
+# A YouTube title runs to a hundred characters of capitals and channel
+# branding. Three of them read aloud took 37 seconds, and the listener was
+# only given six to answer in - the question outlasted the patience for it.
+SPOKEN_TITLE_CHARS = int(os.getenv("YOUTUBE_SPOKEN_TITLE_CHARS", "60"))
+
+
+def _shorten(title: str) -> str:
+    title = " ".join(title.split())
+    # Titles are often "Real title | Channel branding"; the tail is not the name.
+    head = title.split(" | ")[0].strip() or title
+    if len(head) <= SPOKEN_TITLE_CHARS:
+        return head
+    cut = head[:SPOKEN_TITLE_CHARS].rsplit(" ", 1)[0]
+    return f"{cut}..."
 
 
 def _speak(batch: list[Video], start: int) -> str:
     lines = [
-        f"Video {index}: {video.title}, from {video.channel}, {_ago(video.published)}."
+        f"Video {index}: {_shorten(video.title)}, from {video.channel}, {_ago(video.published)}."
         for index, video in enumerate(batch, start=start + 1)
     ]
     return " ".join(lines)
