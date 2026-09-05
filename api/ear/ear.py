@@ -111,6 +111,15 @@ class EarConfig:
     # A person needs about a second; the old behaviour started counting
     # silence immediately and closed the recording before they began.
     lead_in_seconds: float = 5.0
+    # After answering, keep listening this long for a reply to the reply, so a
+    # conversation does not need the wake phrase at every step - "which one to
+    # play", "and tomorrow?". Shorter than the first lead-in on purpose: this
+    # window opens on its own, so it must not sit open listening to the room.
+    # 0 disables it and every turn starts with the wake phrase again.
+    followup_seconds: float = 6.0
+    # How many times in a row that may happen before the wake phrase is
+    # required again. Bounds how far an accidental capture can run.
+    followup_turns: int = 3
     # Speech has to persist for this long to count as speech at all, so the
     # tail of our own acknowledgement leaking back into the microphone does
     # not open and then immediately close a recording.
@@ -175,6 +184,8 @@ class EarConfig:
             max_command_seconds=float(str_env("EAR_MAX_COMMAND_SECONDS", str(defaults.max_command_seconds))),
             min_command_seconds=float(str_env("EAR_MIN_COMMAND_SECONDS", str(defaults.min_command_seconds))),
             lead_in_seconds=float(str_env("EAR_LEAD_IN_SECONDS", str(defaults.lead_in_seconds))),
+            followup_seconds=float(str_env("EAR_FOLLOWUP_SECONDS", str(defaults.followup_seconds))),
+            followup_turns=int(str_env("EAR_FOLLOWUP_TURNS", str(defaults.followup_turns))),
             speech_onset_seconds=float(str_env("EAR_SPEECH_ONSET_SECONDS", str(defaults.speech_onset_seconds))),
             settle_seconds=float(str_env("EAR_SETTLE_SECONDS", str(defaults.settle_seconds))),
             wake_require_final=str_env("EAR_WAKE_REQUIRE_FINAL", "true").lower() != "false",
@@ -486,39 +497,61 @@ class ServitorEar:
     # ----------------------------------------------------------------- turn
 
     def _handle_wake(self, stream) -> None:
+        """Run the conversation the wake phrase opened.
+
+        More than one exchange can follow a single wake. After answering, the
+        ear keeps listening for a few seconds so a reply to the reply - "the
+        second one", "and tomorrow?" - does not need the phrase again. The
+        window closes on its own if nobody speaks, so saying nothing ends the
+        conversation, which is what saying nothing should do.
+        """
         logger.info(f"[Ear] wake phrase heard: {self.config.wake_phrase!r}")
         self._set_turn()
         self._set_state(AWAKE)
         self._speak_wav(self._ack_audio())
         self._drain(stream)
 
-        self._set_state(RECORDING)
-        command = self._record_command(stream)
-        if command is None:
-            logger.info("[Ear] no command followed the wake phrase")
-            return
+        lead_in = self.config.lead_in_seconds
+        for exchange in range(1 + max(0, self.config.followup_turns)):
+            self._set_state(RECORDING)
+            command = self._record_command(stream, lead_in_seconds=lead_in)
+            if command is None:
+                if exchange == 0:
+                    logger.info("[Ear] no command followed the wake phrase")
+                else:
+                    logger.info("[Ear] conversation ended in silence")
+                return
 
-        spool_path = self.config.spool_dir / f"command-{int(time.time())}.wav"
-        spool_path.write_bytes(command)
-        logger.info(f"[Ear] command captured: {spool_path} ({len(command)} bytes)")
-        self._trim_spool()
+            spool_path = self.config.spool_dir / f"command-{int(time.time())}.wav"
+            spool_path.write_bytes(command)
+            logger.info(f"[Ear] command captured: {spool_path} ({len(command)} bytes)")
+            self._trim_spool()
 
-        if self.responder is None:
-            return
+            if self.responder is None:
+                return
 
-        self._set_state(THINKING)
-        try:
-            reply = self.responder(command)
-        except Exception as error:
-            logger.exception("[Ear] responder failed")
-            self._set_state(ERROR, str(error))
-            return
-        if reply:
+            self._set_state(THINKING)
+            try:
+                reply = self.responder(command)
+            except Exception as error:
+                logger.exception("[Ear] responder failed")
+                self._set_state(ERROR, str(error))
+                return
+            if not reply:
+                return
+
             # A responder may answer with plain text or with a Reply carrying
             # the language it should be spoken in.
             text = getattr(reply, "text", reply)
             self._set_turn(getattr(reply, "heard", ""), str(text))
             self._speak_text(text, getattr(reply, "language", None))
+
+            if self.config.followup_seconds <= 0:
+                return
+            # The reply was just spoken aloud; without this the speaker's own
+            # tail is what the follow-up window hears first.
+            self._drain(stream)
+            lead_in = self.config.followup_seconds
 
     def _trim_spool(self) -> None:
         """Keep only the newest few recordings.
@@ -560,17 +593,21 @@ class ServitorEar:
                 break
             stream.read(BLOCK_FRAMES)
 
-    def _record_command(self, stream) -> bytes | None:
+    def _record_command(self, stream, lead_in_seconds: float | None = None) -> bytes | None:
         """Record until the speaker stops, capped by `max_command_seconds`.
 
         Two clocks run here: one waiting for speech to begin, one waiting for
         it to end. Collapsing them into a single silence counter is what made
         an earlier version close the recording before the user had started.
+
+        `lead_in_seconds` overrides how long to wait for speech to begin: a
+        follow-up gets a shorter window than the one after the wake phrase.
         """
         threshold = self._speech_threshold()
         blocks_per_second = SAMPLE_RATE / BLOCK_FRAMES
         silence_blocks = int(self.config.silence_seconds * blocks_per_second)
-        lead_in_blocks = int(self.config.lead_in_seconds * blocks_per_second)
+        lead_in = self.config.lead_in_seconds if lead_in_seconds is None else lead_in_seconds
+        lead_in_blocks = int(lead_in * blocks_per_second)
         onset_blocks = max(1, int(self.config.speech_onset_seconds * blocks_per_second))
         max_blocks = int(self.config.max_command_seconds * blocks_per_second)
 

@@ -690,3 +690,90 @@ class WakeCommitTests(unittest.TestCase):
     def test_a_breath_no_longer_ends_a_command(self):
         # A pause for air is comfortably under two seconds.
         self.assertGreaterEqual(EarConfig().silence_seconds, 2.0)
+
+
+class FollowUpTurnTests(unittest.TestCase):
+    """A conversation should not need the wake phrase at every step."""
+
+    class _Responder:
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.calls = 0
+
+        def __call__(self, wav):
+            self.calls += 1
+            return self.replies.pop(0) if self.replies else None
+
+    def _ear(self, responder, **overrides):
+        import tempfile
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        config = EarConfig(spool_dir=Path(tmp.name), **overrides)
+        ear = ServitorEar(config, responder=responder)
+        ear._speak_wav = lambda *a, **k: None
+        ear._speak_text = lambda *a, **k: None
+        ear._ack_audio = lambda: b""
+        ear._drain = lambda stream: None
+        return ear
+
+    def _commands(self, ear, captures):
+        """Feed _record_command a fixed script of turns."""
+        script = list(captures)
+        seen = []
+
+        def record(stream, lead_in_seconds=None):
+            seen.append(lead_in_seconds)
+            return script.pop(0) if script else None
+
+        ear._record_command = record
+        return seen
+
+    def test_a_second_command_is_taken_without_the_wake_phrase(self):
+        responder = self._Responder(["one", "two"])
+        ear = self._ear(responder)
+        self._commands(ear, [b"RIFF1", b"RIFF2", None])
+        ear._handle_wake(object())
+        self.assertEqual(responder.calls, 2)
+
+    def test_the_follow_up_window_is_shorter_than_the_first(self):
+        responder = self._Responder(["one", "two"])
+        ear = self._ear(responder, lead_in_seconds=5.0, followup_seconds=6.0)
+        seen = self._commands(ear, [b"RIFF1", b"RIFF2", None])
+        ear._handle_wake(object())
+        self.assertEqual(seen[0], 5.0)
+        self.assertEqual(seen[1], 6.0)
+
+    def test_silence_ends_the_conversation(self):
+        responder = self._Responder(["one"])
+        ear = self._ear(responder)
+        self._commands(ear, [b"RIFF1", None])
+        ear._handle_wake(object())
+        self.assertEqual(responder.calls, 1)
+
+    def test_follow_ups_are_bounded(self):
+        responder = self._Responder(["a", "b", "c", "d", "e", "f"])
+        ear = self._ear(responder, followup_turns=2)
+        self._commands(ear, [b"1", b"2", b"3", b"4", b"5"])
+        ear._handle_wake(object())
+        self.assertEqual(responder.calls, 3)  # the first, plus two follow-ups
+
+    def test_zero_seconds_turns_the_whole_thing_off(self):
+        responder = self._Responder(["one", "two"])
+        ear = self._ear(responder, followup_seconds=0.0)
+        self._commands(ear, [b"RIFF1", b"RIFF2"])
+        ear._handle_wake(object())
+        self.assertEqual(responder.calls, 1)
+
+    def test_saying_nothing_at_all_answers_nothing(self):
+        responder = self._Responder(["one"])
+        ear = self._ear(responder)
+        self._commands(ear, [None])
+        ear._handle_wake(object())
+        self.assertEqual(responder.calls, 0)
+
+    def test_the_window_is_configurable(self):
+        with _env(EAR_FOLLOWUP_SECONDS="0", EAR_FOLLOWUP_TURNS="9"):
+            config = EarConfig.from_env()
+            self.assertEqual(config.followup_seconds, 0.0)
+            self.assertEqual(config.followup_turns, 9)
