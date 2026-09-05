@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────
 # Servitor Assistant – Local startup script
-# Starts: MCP servers (8001, 8002) + Server API (8000) + Frontend (5173)
+# Starts: MCP servers (8001, 8002, 8003) + Server API (8000) + Frontend (5173)
 # ─────────────────────────────────────────────
 
 set -e
@@ -49,16 +49,10 @@ check_cmd() {
 
 check_cmd uv
 check_cmd npm
-check_cmd ollama
 
-# ── Check ollama is running ───────────────────────────────────────
+# ── Models ────────────────────────────────────────────────────────
 
-if ! ollama list &>/dev/null; then
-    log "Ollama not running – starting it in background..."
-    ollama serve &>/dev/null &
-    PIDS+=($!)
-    sleep 2
-fi
+# No Ollama: the models run locally through OpenVINO, in-process.
 
 # ── 1. General MCP Server (port 8001) ─────────────────────────────
 
@@ -82,10 +76,21 @@ MCP_ACTIVITY_PID=$!
 PIDS+=($MCP_ACTIVITY_PID)
 ok "Weekly activity MCP server PID=$MCP_ACTIVITY_PID  (logs/mcp-activity.log)"
 
+# ── 3. Slim Nextcloud MCP Server (port 8003) ─────────────────────
+
+log "Starting slim Nextcloud MCP server on :8003 ..."
+(
+    cd "$ROOT_DIR/api"
+    uv run --project "$ROOT_DIR" python -m mcp_module.nextcloud_slim.stream
+) > "$ROOT_DIR/logs/mcp-nextcloud-slim.log" 2>&1 &
+MCP_SLIM_PID=$!
+PIDS+=($MCP_SLIM_PID)
+ok "Slim Nextcloud MCP server PID=$MCP_SLIM_PID  (logs/mcp-nextcloud-slim.log)"
+
 # Wait briefly for MCP to be ready before starting the API
 sleep 2
 
-# ── 3. Server API (port 8000) ─────────────────────────────────────
+# ── 4. Server API (port 8000) ─────────────────────────────────────
 
 log "Starting Server API on :8000 ..."
 (
@@ -96,7 +101,7 @@ API_PID=$!
 PIDS+=($API_PID)
 ok "Server API PID=$API_PID  (logs/api.log)"
 
-# ── 4. Frontend (port 5173) ───────────────────────────────────────
+# ── 5. Frontend (port 5173) ───────────────────────────────────────
 
 log "Starting frontend..."
 (
@@ -117,6 +122,7 @@ echo -e "  Frontend  →  ${YELLOW}http://localhost:5173${NC}"
 echo -e "  API       →  ${YELLOW}http://localhost:8000${NC}"
 echo -e "  MCP       →  ${YELLOW}http://localhost:8001/mcp${NC}"
 echo -e "  MCP Dev   →  ${YELLOW}http://localhost:8002/mcp${NC}"
+echo -e "  MCP NC    →  ${YELLOW}http://localhost:8003/mcp${NC}"
 echo ""
 echo -e "  ${CYAN}Press Ctrl+C to stop all services${NC}"
 echo ""

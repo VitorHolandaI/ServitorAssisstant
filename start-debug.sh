@@ -52,14 +52,8 @@ check_cmd() {
 
 check_cmd uv
 check_cmd npm
-check_cmd ollama
 
-if ! ollama list &>/dev/null; then
-    log "Ollama not running – starting it..."
-    ollama serve &
-    PIDS+=($!)
-    sleep 2
-fi
+# No Ollama: the models run locally through OpenVINO, in-process.
 
 dbg "DEBUG=true — all Python logs printed to terminal"
 echo ""
@@ -86,9 +80,20 @@ MCP_ACTIVITY_PID=$!
 PIDS+=($MCP_ACTIVITY_PID)
 ok "Weekly activity MCP server PID=$MCP_ACTIVITY_PID"
 
+# ── 3. Slim Nextcloud MCP Server (port 8003) ────────────────────
+
+log "Starting slim Nextcloud MCP server on :8003 ..."
+(
+    cd "$ROOT_DIR/api"
+    uv run --project "$ROOT_DIR" python -m mcp_module.nextcloud_slim.stream 2>&1 | tee "$ROOT_DIR/logs/mcp-nextcloud-slim.log" | sed "s/^/${YELLOW}[MCP-NC]${NC} /"
+) &
+MCP_SLIM_PID=$!
+PIDS+=($MCP_SLIM_PID)
+ok "Slim Nextcloud MCP server PID=$MCP_SLIM_PID"
+
 sleep 3
 
-# ── 3. Server API (port 8000) — logs to file + terminal ──────────
+# ── 4. Server API (port 8000) — logs to file + terminal ──────────
 
 log "Starting Server API on :8000 ..."
 (
@@ -118,6 +123,7 @@ echo -e "  Frontend  →  ${YELLOW}http://localhost:5173${NC}"
 echo -e "  API       →  ${YELLOW}http://localhost:8000${NC}"
 echo -e "  MCP       →  ${YELLOW}http://localhost:8001/mcp${NC}"
 echo -e "  MCP Dev   →  ${YELLOW}http://localhost:8002/mcp${NC}"
+echo -e "  MCP NC    →  ${YELLOW}http://localhost:8003/mcp${NC}"
 echo -e "  Logs dir  →  ${YELLOW}logs/${NC}"
 echo ""
 echo -e "  ${MAGENTA}Press Ctrl+C to stop all services${NC}"

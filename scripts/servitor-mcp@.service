@@ -1,0 +1,21 @@
+[Unit]
+Description=Servitor MCP server (%i)
+Documentation=file://@ROOT_DIR@/api/mcp_module/profiles.py
+# The agent is useless without these, but they are useless without the network
+# they reach out to (Nextcloud, Gitea, Open-Meteo).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT_DIR@/api
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@ROOT_DIR@/.venv/bin/python -m %i
+Restart=on-failure
+RestartSec=5
+# These call out to Nextcloud and Gitea and hold no accelerator; they should
+# yield to anything the user is actually looking at.
+Nice=5
+
+[Install]
+WantedBy=default.target
