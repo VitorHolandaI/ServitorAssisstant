@@ -330,7 +330,8 @@ async def play_video(number: int) -> str:
         first = _state.cursor - len(_state.offered) + 1
         return f"Only videos {first} to {_state.cursor} were just read out."
     video = _state.offered[position]
-    if not await open_url(video.url):
+    # A video that opens paused has not been played.
+    if not await open_url(video.url, play=True):
         return "No browser found on this machine."
     return f"Playing {video.title}."
 
