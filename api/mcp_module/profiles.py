@@ -57,6 +57,12 @@ LOCAL_TOOLS = frozenset({
     "pause_playback",
     "next_track",
     "previous_track",
+    # what is new on the channels you follow
+    "list_new_videos",
+    "more_videos",
+    "play_video",
+    "follow_channel",
+    "followed_channels",
 })
 
 # None means "no allow-list": take whatever the servers offer.

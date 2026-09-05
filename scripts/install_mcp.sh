@@ -17,6 +17,7 @@ MODULES=(
     mcp_module.desktop.stream              # :8004 dictation into the focused window
     mcp_module.browser.stream              # :8005 open sites and YouTube searches
     mcp_module.media.stream                # :8006 playback control over MPRIS
+    mcp_module.youtube.stream              # :8007 what is new on followed channels
 )
 
 mkdir -p "$UNIT_DIR"

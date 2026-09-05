@@ -11,14 +11,14 @@ have no business being reachable from it.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
-import shutil
 from urllib.parse import quote_plus, urlparse
 
 from mcp.server.fastmcp import FastMCP
+
+from mcp_module.browser.open_url import open_url
 
 logger = logging.getLogger(__name__)
 
@@ -56,21 +56,8 @@ def _safe_url(target: str) -> str | None:
 
 
 async def _open(url: str) -> str:
-    browser = shutil.which("firefox") or shutil.which("xdg-open")
-    if not browser:
+    if not await open_url(url):
         return "No browser found on this machine."
-    process = await asyncio.create_subprocess_exec(
-        browser, url,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    # Firefox hands the URL to the running instance and exits; if it is
-    # starting cold it stays in the foreground, which is not ours to wait on.
-    try:
-        await asyncio.wait_for(process.wait(), timeout=5.0)
-    except asyncio.TimeoutError:
-        pass
-    logger.info(f"[Browser] opened {url}")
     return url
 
 

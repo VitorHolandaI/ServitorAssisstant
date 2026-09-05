@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Import a Google Takeout subscriptions export.
+
+    scripts/import_youtube_subscriptions ~/Downloads/subscriptions.csv
+
+Takeout is a one-off: after this the channel list lives in
+~/.config/servitor/youtube-channels.csv and grows by voice with
+"hey oracle, follow this channel".
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
+
+from mcp_module.youtube import channels  # noqa: E402
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    source = Path(sys.argv[1]).expanduser()
+    if not source.is_file():
+        print(f"Not a file: {source}", file=sys.stderr)
+        return 1
+    added, known = channels.import_takeout(source)
+    print(f"Added {added} channel(s); {known} already known.")
+    print(f"List: {channels.CHANNELS_FILE}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
