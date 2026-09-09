@@ -38,6 +38,11 @@ class McpEndpoint:
         return self.url
 
 
+def _endpoint_url(endpoint) -> str:
+    """The address, whether it came as a plain string or an McpEndpoint."""
+    return endpoint if isinstance(endpoint, str) else endpoint.url
+
+
 def _open_endpoint(endpoint):
     """Open a streamable-HTTP connection, honouring per-endpoint auth and CA."""
     if isinstance(endpoint, str):
@@ -206,18 +211,34 @@ class llm_mcp_client:
         one task is worth more than saving that.
         """
         async with contextlib.AsyncExitStack() as stack:
-            clients = [await stack.enter_async_context(_open_endpoint(addr))
-                       for addr in self.mcp_addresses]
-            sessions = [
-                await stack.enter_async_context(
-                    ClientSession(read, write, elicitation_callback=self._elicitation_callback())
-                )
-                for read, write, _ in clients
-            ]
             all_tools = []
-            for session in sessions:
-                await session.initialize()
-                all_tools.extend(await load_mcp_tools(session))
+            missing = []
+            for addr in self.mcp_addresses:
+                try:
+                    read, write, _ = await stack.enter_async_context(_open_endpoint(addr))
+                    session = await stack.enter_async_context(
+                        ClientSession(
+                            read, write, elicitation_callback=self._elicitation_callback()
+                        )
+                    )
+                    await session.initialize()
+                    all_tools.extend(await load_mcp_tools(session))
+                except Exception as error:
+                    # One server down used to end the turn. The failure unwound
+                    # the shared exit stack and surfaced as a five-deep
+                    # ExceptionGroup with httpx.ConnectError at the bottom -
+                    # unreadable, and the servers that had already answered were
+                    # thrown away with it. A missing endpoint is now a tool the
+                    # agent does not have, not a dead conversation.
+                    missing.append(_endpoint_url(addr))
+                    logger.warning(
+                        f"[client2] {_endpoint_url(addr)} unreachable "
+                        f"({type(error).__name__}); continuing without it"
+                    )
+            if missing and len(missing) == len(self.mcp_addresses):
+                raise RuntimeError(
+                    f"no MCP server answered: {', '.join(missing)}"
+                )
             self._tools_by_name = {tool.name: tool for tool in all_tools}
             chosen = select_tools(all_tools, self.profile)
             logger.debug(f"[client2] {len(chosen)} of {len(all_tools)} tools")
