@@ -1,12 +1,28 @@
+# The build context is tarred and sent to the daemon on every build. Without
+# the first two entries that is 17 GB, most of it a virtualenv the image never
+# uses and models that arrive by bind mount at runtime, not through the image.
+.venv
+.venv-tts
+voice_models
+
+# The laptop half: microphone, iGPU, MPRIS, the focused window. Never in a
+# container.
+servitor_local_notebook
+
 **/__pycache__
 **/*.pyc
 **/*.pyo
 **/.pytest_cache
 **/*.egg-info
+.mypy_cache
+.ruff_cache
+.ovcache
 .git
 .gitignore
+.claude
 logs/
 data/
+stt_experiments
 front/node_modules
 front/dist
 *.md

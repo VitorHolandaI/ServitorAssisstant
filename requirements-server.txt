@@ -1,0 +1,43 @@
+# What the containerised half actually imports.
+#
+# requirements.txt is the laptop's: it carries torch, openvino-genai, vosk and
+# pyaudio for the ear. Measured in the working virtualenv, those pull 5.8 GB of
+# torch and its bundled CUDA libraries into an image that never imports them --
+# verified by importing ServerApi, mcp_module.host, server.Server, client2 and
+# both MCP servers with those modules blocked at the import hook.
+
+# API
+fastapi==0.122.0
+uvicorn
+starlette==0.50.0
+
+# LLM agent
+langchain-ollama
+langchain-core
+langchain-mcp-adapters
+langgraph
+mcp
+
+# TTS. piper-tts runs on onnxruntime, not torch.
+piper-tts
+sounddevice==0.5.3
+soundfile==0.13.1
+playsound3==3.3.0
+sox==1.5.0
+
+# Speech recognition. No pyaudio: the server reads sr.AudioFile, and PyAudio is
+# only needed for sr.Microphone, which is the ear's job.
+speechrecognition==3.14.4
+
+# Weather tools
+openmeteo-requests
+requests-cache
+retry-requests
+pandas==1.5.3
+
+# Utilities
+numpy==1.26.4
+requests==2.33.0
+urllib3>=2.6.3
+python-dotenv==1.0.1
+websockets==15.0.1

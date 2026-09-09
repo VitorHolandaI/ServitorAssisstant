@@ -1,21 +1,19 @@
 FROM python:3.11-slim
 
+# portaudio19-dev, gcc and python3-dev were here to compile pyaudio, which the
+# server does not install: it reads audio from files, not from a microphone.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
     libgomp1 \
     espeak-ng \
-    portaudio19-dev \
     curl \
-    git \
-    gcc \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Install Python deps first (layer cache)
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-server.txt ./
+RUN pip install --no-cache-dir -r requirements-server.txt
 
 # Copy application code
 COPY api/ ./api/
