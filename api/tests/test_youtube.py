@@ -9,9 +9,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mcp_module.youtube import channels  # noqa: E402
-from mcp_module.youtube.stream import (  # noqa: E402
+from servitor_local_notebook.mcp.youtube import channels  # noqa: E402
+from servitor_local_notebook.mcp.youtube.stream import (  # noqa: E402
     Video,
     _understand,
     _ago,

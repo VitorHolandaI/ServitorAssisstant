@@ -6,11 +6,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from ear.brain import LocalBrain, ServerBrain
-from ear.devices import guard_device
-from ear.stop_words import is_stop_phrase
-from ear.ear import EarConfig
-from ear.transcribe import OpenVinoWhisper
+from servitor_local_notebook.ear.brain import LocalBrain, ServerBrain
+from servitor_local_notebook.ear.devices import guard_device
+from servitor_local_notebook.ear.stop_words import is_stop_phrase
+from servitor_local_notebook.ear.ear import EarConfig
+from servitor_local_notebook.ear.transcribe import OpenVinoWhisper
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _brain_for(config: EarConfig):
     if config.server_url:
         return ServerBrain(config.server_url)
     if config.agent_enabled and config.mcp_addresses:
-        from ear.agent_brain import AgentBrain
+        from servitor_local_notebook.ear.agent_brain import AgentBrain
 
         return AgentBrain(
             config.llm_model,

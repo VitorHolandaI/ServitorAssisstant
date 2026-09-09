@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ear.spoken_text import to_spoken  # noqa: E402
+from servitor_local_notebook.ear.spoken_text import to_spoken  # noqa: E402
 
 
 class SpokenTextTests(unittest.TestCase):

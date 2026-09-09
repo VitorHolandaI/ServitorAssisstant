@@ -7,9 +7,10 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mcp_module.browser.stream import _explicit_scheme, _looks_like_url, _safe_url  # noqa: E402
-from mcp_module.media.stream import _metadata_text  # noqa: E402
+from servitor_local_notebook.mcp.browser.stream import _explicit_scheme, _looks_like_url, _safe_url  # noqa: E402
+from servitor_local_notebook.mcp.media.stream import _metadata_text  # noqa: E402
 
 
 class BrowserTargetTests(unittest.TestCase):

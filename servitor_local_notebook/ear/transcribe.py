@@ -25,7 +25,7 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
-from ear.devices import guard_device
+from servitor_local_notebook.ear.devices import guard_device
 
 logger = logging.getLogger(__name__)
 

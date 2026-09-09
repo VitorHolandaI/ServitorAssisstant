@@ -701,7 +701,7 @@ class ServitorEar:
 
     def _speaker(self):
         if self._voice is None:
-            from ear import speak
+            from servitor_local_notebook.ear import speak
 
             self._voice = speak.build(self.config)
         return self._voice

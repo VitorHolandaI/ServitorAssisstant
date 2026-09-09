@@ -13,7 +13,11 @@ Run it as a module from `api/`:
 
     python -m mcp_module.host
 
-Individual servers still run standalone (`python -m mcp_module.youtube.stream`),
+That serves the three servers a headless deployment can use. On the laptop,
+`python -m servitor_local_notebook.mcp_host` serves those plus the four that
+need a desktop.
+
+Individual servers still run standalone (`python -m servitor_local_notebook.mcp.youtube.stream`),
 which is what makes one of them easy to restart or debug on its own.
 """
 from __future__ import annotations
@@ -27,14 +31,13 @@ logger = logging.getLogger(__name__)
 
 # Imported lazily inside main() so a broken server is reported by name rather
 # than taking the whole host down with an import error at module scope.
+# The servers that run anywhere. Desktop, browser, media and YouTube need a
+# screen and a session bus, so they live in servitor_local_notebook and are
+# hosted by servitor_local_notebook/mcp_host.py, which serves these three too.
 SERVERS = (
     ("mcp_module.stremable_http.stream2", "general"),
     ("mcp_module.dev_activity.stream", "dev-activity"),
     ("mcp_module.nextcloud_slim.stream", "nextcloud"),
-    ("mcp_module.desktop.stream", "desktop"),
-    ("mcp_module.browser.stream", "browser"),
-    ("mcp_module.media.stream", "media"),
-    ("mcp_module.youtube.stream", "youtube"),
 )
 
 

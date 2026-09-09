@@ -6,5 +6,7 @@ ROOT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 PY="$ROOT_DIR/.venv/bin/python"
 [ -x "$PY" ] || PY="python3"
 
-export PYTHONPATH="$ROOT_DIR/api${PYTHONPATH:+:$PYTHONPATH}"
-exec "$PY" -m ear "$@"
+# The ear lives in servitor_local_notebook at the repository root; the MCP
+# client it talks to lives under api/. Both are source roots.
+export PYTHONPATH="$ROOT_DIR:$ROOT_DIR/api${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY" -m servitor_local_notebook.ear "$@"

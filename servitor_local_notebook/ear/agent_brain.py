@@ -26,7 +26,7 @@ import threading
 import time
 from pathlib import Path
 
-from ear.brain import language_clause
+from servitor_local_notebook.ear.brain import language_clause
 
 logger = logging.getLogger(__name__)
 

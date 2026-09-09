@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from mcp_module.stremable_http.ov_chat import (  # noqa: E402
+from servitor_local_notebook.ov_chat import (  # noqa: E402
     _is_device_fault,
     _parse_tool_calls,
 )

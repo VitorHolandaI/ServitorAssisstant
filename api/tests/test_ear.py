@@ -19,9 +19,10 @@ from unittest.mock import patch
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from ear import control  # noqa: E402
-from ear.ear import (  # noqa: E402
+from servitor_local_notebook.ear import control  # noqa: E402
+from servitor_local_notebook.ear.ear import (  # noqa: E402
     LISTENING,
     _EnergyGate,
     OFF,
@@ -30,16 +31,16 @@ from ear.ear import (  # noqa: E402
     _rms,
     _to_wav,
 )
-from ear.brain import LocalBrain  # noqa: E402
-from ear.stop_words import is_stop_phrase  # noqa: E402
-from ear.devices import (  # noqa: E402
+from servitor_local_notebook.ear.brain import LocalBrain  # noqa: E402
+from servitor_local_notebook.ear.stop_words import is_stop_phrase  # noqa: E402
+from servitor_local_notebook.ear.devices import (  # noqa: E402
     connected_displays,
     fits_on_shared_gpu,
     guard_device,
     model_weight_bytes,
 )
-from ear.transcribe import Transcript, wav_to_float32  # noqa: E402
-from ear.voice_fx import PROFILES, VoxProfile, apply_vox  # noqa: E402
+from servitor_local_notebook.ear.transcribe import Transcript, wav_to_float32  # noqa: E402
+from servitor_local_notebook.ear.voice_fx import PROFILES, VoxProfile, apply_vox  # noqa: E402
 
 EAR_ENV = {
     "EAR_WAKE_PHRASE": "",
@@ -143,14 +144,14 @@ class VoiceRoutingTests(unittest.TestCase):
             self.assertEqual(EarConfig.from_env().vox_profile, "heavy")
 
     def test_language_selects_a_matching_voice(self):
-        from ear.speak import KokoroVoice
+        from servitor_local_notebook.ear.speak import KokoroVoice
 
         voice = KokoroVoice(Path("/nope"), Path("/nope"), Path("/nope"))
         self.assertEqual(voice._for_language("pt")[0], "pf_dora")
         self.assertEqual(voice._for_language("en")[0], "af_heart")
 
     def test_unknown_language_falls_back_to_the_default_voice(self):
-        from ear.speak import KokoroVoice
+        from servitor_local_notebook.ear.speak import KokoroVoice
 
         voice = KokoroVoice(Path("/nope"), Path("/nope"), Path("/nope"), voice="am_onyx")
         self.assertEqual(voice._for_language("kl")[0], "am_onyx")
@@ -272,7 +273,7 @@ class EnergyGateTests(unittest.TestCase):
 class DotenvTests(unittest.TestCase):
     def test_the_daemon_reads_the_projects_env_file(self):
         """Every EAR_* line in .env.example is a lie unless this holds."""
-        source = (Path(__file__).resolve().parents[1] / "ear" / "__main__.py").read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[2] / "servitor_local_notebook" / "ear" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn("load_dotenv", source)
 
 
@@ -517,17 +518,17 @@ class GpuSizeGuardTests(unittest.TestCase):
 
     def test_a_model_under_the_ceiling_keeps_the_gpu(self):
         model = self._model("small", 2048)
-        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=100_000):
+        with _env(), mock.patch("servitor_local_notebook.ear.devices.gpu_max_alloc_bytes", return_value=100_000):
             self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "GPU")
 
     def test_a_model_over_the_ceiling_is_sent_to_the_npu(self):
         model = self._model("big", 90_000)
-        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=100_000):
+        with _env(), mock.patch("servitor_local_notebook.ear.devices.gpu_max_alloc_bytes", return_value=100_000):
             self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "NPU")
 
     def test_an_unreadable_ceiling_is_not_treated_as_unlimited(self):
         model = self._model("small", 8)
-        with _env(), mock.patch("ear.devices.gpu_max_alloc_bytes", return_value=0):
+        with _env(), mock.patch("servitor_local_notebook.ear.devices.gpu_max_alloc_bytes", return_value=0):
             self.assertEqual(guard_device("GPU", "x", self.drm, model_dir=model), "NPU")
 
 
@@ -565,21 +566,21 @@ class IdleUnloadTests(unittest.TestCase):
 
     def test_nothing_is_dropped_while_the_model_is_still_in_use(self):
         brain = self._brain()
-        with mock.patch("ear.brain.time.monotonic", return_value=10.0):
+        with mock.patch("servitor_local_notebook.ear.brain.time.monotonic", return_value=10.0):
             brain._last_used = 5.0
             self.assertFalse(brain.unload_if_idle(600.0))
         self.assertIsNotNone(brain._pipeline)
 
     def test_the_model_is_dropped_once_the_room_has_been_quiet(self):
         brain = self._brain()
-        with mock.patch("ear.brain.time.monotonic", return_value=1000.0):
+        with mock.patch("servitor_local_notebook.ear.brain.time.monotonic", return_value=1000.0):
             brain._last_used = 100.0
             self.assertTrue(brain.unload_if_idle(600.0))
         self.assertIsNone(brain._pipeline)
 
     def test_a_zero_timeout_keeps_the_model_loaded_forever(self):
         brain = self._brain()
-        with mock.patch("ear.brain.time.monotonic", return_value=1e9):
+        with mock.patch("servitor_local_notebook.ear.brain.time.monotonic", return_value=1e9):
             self.assertFalse(brain.unload_if_idle(0.0))
         self.assertIsNotNone(brain._pipeline)
 
@@ -822,7 +823,7 @@ class ConversationMemoryTests(unittest.TestCase):
         ear._handle_wake(object())  # must not raise
 
     def test_the_assistant_forgets_by_resetting_its_brain(self):
-        from ear.assistant import LocalAssistant
+        from servitor_local_notebook.ear.assistant import LocalAssistant
 
         assistant = LocalAssistant.__new__(LocalAssistant)
         assistant.brain = self._Brain()

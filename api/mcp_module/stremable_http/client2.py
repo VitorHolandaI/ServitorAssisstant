@@ -143,7 +143,7 @@ class llm_mcp_client:
             # Local model, no Ollama, no network. The device is only a request:
             # ov_chat re-checks it against the display and the driver's
             # allocation ceiling before anything is compiled.
-            from mcp_module.stremable_http.ov_chat import OpenVINOChat
+            from servitor_local_notebook.ov_chat import OpenVINOChat
 
             self._llm = OpenVINOChat(
                 model_path=model_address,

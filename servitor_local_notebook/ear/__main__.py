@@ -13,7 +13,7 @@ import logging
 import signal
 import threading
 
-from ear import control
+from servitor_local_notebook.ear import control
 
 
 def _daemon() -> int:
@@ -21,8 +21,8 @@ def _daemon() -> int:
     # reconnect whenever the daemon is down, and `status`/`toggle`/`stream`
     # have no business loading numpy and the model wrappers to print a line.
     from dotenv import load_dotenv
-    from ear import assistant
-    from ear.ear import REPO_ROOT, EarConfig, ServitorEar
+    from servitor_local_notebook.ear import assistant
+    from servitor_local_notebook.ear.ear import REPO_ROOT, EarConfig, ServitorEar
 
     # Same .env the rest of the project reads. Without this every EAR_* line
     # documented in .env.example would be silently ignored. load_dotenv does

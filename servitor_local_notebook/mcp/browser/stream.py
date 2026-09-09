@@ -18,7 +18,7 @@ from urllib.parse import quote_plus, urlparse
 
 from mcp.server.fastmcp import FastMCP
 
-from mcp_module.browser.open_url import open_url
+from servitor_local_notebook.mcp.browser.open_url import open_url
 
 logger = logging.getLogger(__name__)
 

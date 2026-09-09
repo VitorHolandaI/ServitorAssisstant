@@ -6,7 +6,7 @@ import logging
 import time
 from pathlib import Path
 
-from ear.devices import guard_device
+from servitor_local_notebook.ear.devices import guard_device
 
 logger = logging.getLogger(__name__)
 

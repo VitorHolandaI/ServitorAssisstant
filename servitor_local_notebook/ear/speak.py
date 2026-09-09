@@ -16,8 +16,8 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
-from ear.spoken_text import to_spoken
-from ear.voice_fx import PROFILES, VoxProfile, apply_vox
+from servitor_local_notebook.ear.spoken_text import to_spoken
+from servitor_local_notebook.ear.voice_fx import PROFILES, VoxProfile, apply_vox
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@
 # kokoro-onnx needs numpy 2.x. This project pins numpy 1.26.4, and gruut —
 # Piper's phonemizer — caps numpy below 2.0, so they cannot share an
 # interpreter. Keeping Kokoro in .venv-tts is what lets us have both; the ear
-# drives it as a subprocess (api/ear/speak.py).
+# drives it as a subprocess (servitor_local_notebook/ear/speak.py).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

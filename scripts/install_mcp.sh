@@ -6,7 +6,7 @@
 # The addresses do not change - every server still answers on its own port.
 #
 # The templated unit is kept for running one server on its own while working
-# on it: systemctl --user start servitor-mcp@mcp_module.youtube.stream
+# on it: systemctl --user start servitor-mcp@servitor_local_notebook.mcp.youtube.stream
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,10 +16,10 @@ MODULES=(
     mcp_module.stremable_http.stream2      # :8001 general
     mcp_module.dev_activity.stream         # :8002 dev activity
     mcp_module.nextcloud_slim.stream       # :8003 nextcloud, slim
-    mcp_module.desktop.stream              # :8004 dictation into the focused window
-    mcp_module.browser.stream              # :8005 open sites and YouTube searches
-    mcp_module.media.stream                # :8006 playback control over MPRIS
-    mcp_module.youtube.stream              # :8007 what is new on followed channels
+    servitor_local_notebook.mcp.desktop.stream              # :8004 dictation into the focused window
+    servitor_local_notebook.mcp.browser.stream              # :8005 open sites and YouTube searches
+    servitor_local_notebook.mcp.media.stream                # :8006 playback control over MPRIS
+    servitor_local_notebook.mcp.youtube.stream              # :8007 what is new on followed channels
 )
 
 mkdir -p "$UNIT_DIR"

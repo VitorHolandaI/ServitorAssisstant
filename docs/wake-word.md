@@ -175,7 +175,7 @@ the memory headroom is a bonus, not the point.
 
 `EAR_LLM_DEVICE=GPU` exists for a machine whose GPU is not also driving a
 display. On this one, leave it alone — and the code now enforces that rather
-than trusting the note: `api/ear/devices.py` reads the DRM connector states
+than trusting the note: `servitor_local_notebook/ear/devices.py` reads the DRM connector states
 and refuses the GPU whenever one reports `connected`, falling back to the NPU
 and saying so. `EAR_ALLOW_SHARED_GPU=true` overrides it for someone who
 means it.

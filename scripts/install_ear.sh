@@ -15,8 +15,8 @@ if [ -e "$PLUGIN_DIR" ] && [ ! -L "$PLUGIN_DIR" ]; then
     echo "[ear] $PLUGIN_DIR exists and is not a symlink; leaving it alone" >&2
     exit 1
 fi
-ln -sfn "$ROOT_DIR/omarchy/vitor.servitor" "$PLUGIN_DIR"
-echo "[ear] plugin linked: $PLUGIN_DIR -> $ROOT_DIR/omarchy/vitor.servitor"
+ln -sfn "$ROOT_DIR/servitor_local_notebook/omarchy/vitor.servitor" "$PLUGIN_DIR"
+echo "[ear] plugin linked: $PLUGIN_DIR -> $ROOT_DIR/servitor_local_notebook/omarchy/vitor.servitor"
 
 sed "s|@ROOT_DIR@|$ROOT_DIR|g" "$ROOT_DIR/scripts/servitor-ear.service" > "$UNIT_DIR/servitor-ear.service"
 systemctl --user daemon-reload

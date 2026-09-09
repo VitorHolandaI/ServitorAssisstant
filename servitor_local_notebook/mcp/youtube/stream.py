@@ -23,8 +23,8 @@ from xml.etree import ElementTree  # nosec B405 - payload is guarded in _parse
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, Field
 
-from mcp_module.browser.open_url import open_url
-from mcp_module.youtube import channels as channel_store
+from servitor_local_notebook.mcp.browser.open_url import open_url
+from servitor_local_notebook.mcp.youtube import channels as channel_store
 
 logger = logging.getLogger(__name__)
 

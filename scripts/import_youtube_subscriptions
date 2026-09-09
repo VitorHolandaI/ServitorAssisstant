@@ -12,9 +12,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
+_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_root / "api"))
+sys.path.insert(0, str(_root))
 
-from mcp_module.youtube import channels  # noqa: E402
+from servitor_local_notebook.mcp.youtube import channels  # noqa: E402
 
 
 def main() -> int:

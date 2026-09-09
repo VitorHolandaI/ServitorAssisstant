@@ -1,6 +1,6 @@
 [Unit]
 Description=Servitor wake-word listener
-Documentation=file://@ROOT_DIR@/api/ear/ear.py
+Documentation=file://@ROOT_DIR@/servitor_local_notebook/ear/ear.py
 After=pipewire.service
 
 [Service]
