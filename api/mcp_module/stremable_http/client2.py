@@ -97,9 +97,28 @@ def _is_explicit_nextcloud_completion(message: str) -> bool:
     )
 
 
+BACKENDS = ("ollama", "openvino")
+
+
+def _resolve_backend(backend: str | None) -> str:
+    """Which chat model the agent talks to.
+
+    The deployment that holds the sessions and the history runs in a VM with
+    no GPU, and Ollama is what it has. OpenVINO is the laptop's arrangement,
+    where the point is running the model on the iGPU next to the microphone.
+    Defaulting to Ollama keeps the VM working when nobody sets anything.
+    """
+    chosen = (backend or os.getenv("SERVITOR_LLM_BACKEND", "ollama")).strip().lower()
+    if chosen not in BACKENDS:
+        raise ValueError(
+            f"SERVITOR_LLM_BACKEND must be one of {', '.join(BACKENDS)}, got {chosen!r}"
+        )
+    return chosen
+
+
 class llm_mcp_client:
     def __init__(self, mcp_addresses: list, model_name: str, model_address: str, system_prompt: str,
-                 profile: str | None = None, ask_user=None):
+                 profile: str | None = None, ask_user=None, backend: str | None = None):
         self.mcp_addresses = mcp_addresses
         # Which tools this agent may see. The server takes them all; the
         # laptop takes the spoken subset, which is smaller context for a
@@ -114,20 +133,35 @@ class llm_mcp_client:
         self.prompt = system_prompt
         self.context_window = int(os.getenv("OLLAMA_NUM_CTX", "32768"))
         self.context_reserved_tokens = 5000
-        # Local OpenVINO model — no Ollama, no network. The device is only a
-        # request: ov_chat re-checks it against the display and the driver's
-        # allocation ceiling before anything is compiled.
-        from mcp_module.stremable_http.ov_chat import OpenVINOChat
-        self._llm = OpenVINOChat(
-            model_path=model_address,
-            device=os.getenv("OV_AGENT_DEVICE", "GPU").strip().upper(),
-            # A ReAct turn has to fit a <tool_call> block and then the answer.
-            # At 128 a call with a few arguments is truncated mid-JSON and is
-            # dropped by the parser, so the agent looks like it ignored its tools.
-            max_tokens=int(os.getenv("OV_AGENT_MAX_TOKENS", "512")),
-            temperature=0.0,
-            do_sample=False,
-        )
+        self.backend = _resolve_backend(backend)
+        if self.backend == "openvino":
+            # Local model, no Ollama, no network. The device is only a request:
+            # ov_chat re-checks it against the display and the driver's
+            # allocation ceiling before anything is compiled.
+            from mcp_module.stremable_http.ov_chat import OpenVINOChat
+
+            self._llm = OpenVINOChat(
+                model_path=model_address,
+                device=os.getenv("OV_AGENT_DEVICE", "GPU").strip().upper(),
+                # A ReAct turn has to fit a <tool_call> block and then the
+                # answer. At 128 a call with a few arguments is truncated
+                # mid-JSON and dropped by the parser, so the agent looks like
+                # it ignored its tools.
+                max_tokens=int(os.getenv("OV_AGENT_MAX_TOKENS", "512")),
+                temperature=0.0,
+                do_sample=False,
+            )
+        else:
+            from langchain_ollama import ChatOllama
+
+            self._llm = ChatOllama(
+                model=model_name,
+                base_url=model_address,
+                keep_alive="10m",
+                timeout=120,
+                num_ctx=self.context_window,
+                model_kwargs={"think": False},
+            )
         self._usage_turn_open = False
         self._tools_by_name = {}
         # Exact prompt/response token counts reported by Ollama on the last LLM
@@ -244,8 +278,15 @@ class llm_mcp_client:
         self._tools_by_name = {}
 
     def unload(self) -> None:
-        """Free the LLM from accelerator memory."""
-        self._llm.unload()
+        """Free the LLM from accelerator memory.
+
+        Only OpenVINO holds weights in this process. Ollama keeps them in its
+        own server and expires them on keep_alive, so there is nothing here to
+        free and asking would be an AttributeError.
+        """
+        free = getattr(self._llm, "unload", None)
+        if free is not None:
+            free()
 
     async def get_response(self, message, history=None, system_prompt=None):
         logger.info(f"[client2] get_response: {message[:80]!r}")

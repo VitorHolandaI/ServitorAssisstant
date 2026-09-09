@@ -20,7 +20,19 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+
+def _ollama_host() -> str:
+    """Read OLLAMA_HOST at call time, not at import time.
+
+    Server.py imports this module on line 18 and calls load_dotenv on line 29,
+    so a module-level read happens eleven lines before .env exists and pins the
+    default. That is how a deployment configured for another box ended up
+    counting tokens against 127.0.0.1.
+    """
+    return os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+
+
 COUNT_TIMEOUT = float(os.getenv("TOKEN_COUNT_TIMEOUT", "30"))
 CACHE_SIZE = 64
 
@@ -75,7 +87,7 @@ def count_chat_tokens(model: str, messages: list[dict], tools: list | None = Non
 
     try:
         resp = requests.post(
-            f"{OLLAMA_HOST.rstrip('/')}/api/chat", json=payload, timeout=COUNT_TIMEOUT
+            f"{_ollama_host().rstrip('/')}/api/chat", json=payload, timeout=COUNT_TIMEOUT
         )
         resp.raise_for_status()
         count = resp.json().get("prompt_eval_count")

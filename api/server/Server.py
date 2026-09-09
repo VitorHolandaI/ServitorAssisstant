@@ -38,7 +38,15 @@ MCP_EXTRA_ADDRESSES = [
 ]
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 
-# Local OpenVINO model (no Ollama). Default: same Qwen3 the ear uses.
+# Which chat model the agent talks to. The VM that serves the sessions has no
+# GPU, so it stays on Ollama; the laptop sets SERVITOR_LLM_BACKEND=openvino to
+# run the model on its iGPU instead.
+LLM_BACKEND = os.getenv("SERVITOR_LLM_BACKEND", "ollama").strip().lower()
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e2b-it-qat")
+
+# OpenVINO model path, used only when that backend is selected. Default: the
+# same Qwen3 the ear uses.
 _repo_root = Path(__file__).parent.parent.parent
 ov_model = os.getenv("OV_MODEL_PATH", "").strip()
 if ov_model:
@@ -193,11 +201,13 @@ class ServitorServer:
             "Never use numeric clock formats like '18:00' or '20:30'."
         )
 
+        openvino = LLM_BACKEND == "openvino"
         agent_mcp = llm_mcp_client(
             mcp_addresses=MCP_ENDPOINTS,
-            model_name="",
-            model_address=ov_model,
-            system_prompt=self.base_prompt
+            model_name="" if openvino else OLLAMA_MODEL,
+            model_address=ov_model if openvino else OLLAMA_HOST,
+            system_prompt=self.base_prompt,
+            backend=LLM_BACKEND,
         )
         self.agent = agent_mcp
 

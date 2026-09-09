@@ -123,6 +123,10 @@ class AgentBrain:
             system_prompt=SYSTEM_PROMPT,
             profile=self.profile,
             ask_user=self.ask_user,
+            # The ear exists to run the model on this machine's iGPU, and it
+            # reaches into _llm.device below. Never Ollama, whatever the
+            # environment says.
+            backend="openvino",
         )
         self._client._llm.device = self.device
         self._client._llm.max_tokens = self.max_tokens
