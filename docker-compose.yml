@@ -54,7 +54,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: uvicorn ServerApi:app --host 0.0.0.0 --port 8000
+    # --forwarded-allow-ips: uvicorn honours X-Forwarded-* only from
+    # 127.0.0.1 by default (config.py:355), and the peer here is the nginx
+    # container on the bridge. Without it the app believes the browser spoke
+    # http and downgrades its own redirects. "*" is safe because this port is
+    # never published -- nginx is the only thing that can reach it.
+    command: >
+      uvicorn ServerApi:app --host 0.0.0.0 --port 8000
+      --forwarded-allow-ips '*'
     depends_on:
       mcp:
         condition: service_started
