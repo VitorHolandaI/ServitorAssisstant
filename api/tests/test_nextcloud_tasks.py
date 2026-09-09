@@ -1,5 +1,8 @@
 import html
 import datetime
+import os
+import pathlib
+import tempfile
 import json
 import unittest
 from typing import cast
@@ -12,6 +15,7 @@ from api.mcp_module.stremable_http.nextcloud_tasks import (
     NextcloudError,
     NextcloudTasksClient,
     _alarm_minutes_by_uid,
+    _default_ca_bundle,
     _mark_vtodo_completed,
     _parse_vtodos,
     _set_vtodo_alarm,
@@ -211,12 +215,28 @@ class NextcloudTasksClientTest(unittest.TestCase):
 
         self.assertFalse(insecure_client.session.verify)
 
-    def test_tls_error_explains_available_configuration(self):
+    def test_ca_bundle_expands_a_tilde_path(self):
+        with tempfile.TemporaryDirectory() as home:
+            bundle = pathlib.Path(home) / "home-root-ca.crt"
+            bundle.write_text("-----BEGIN CERTIFICATE-----\n")
+            env = {"HOME": home, "NC_CA_BUNDLE": "~/home-root-ca.crt"}
+            with patch.dict(os.environ, env, clear=False):
+                # requests hands verify straight to OpenSSL, which never
+                # expands "~" and fails with a bare OSError instead.
+                self.assertEqual(_default_ca_bundle(), str(bundle))
+
+    def test_ca_bundle_rejects_a_missing_file(self):
+        with patch.dict(os.environ, {"NC_CA_BUNDLE": "/nope/missing.crt"}, clear=False):
+            with self.assertRaisesRegex(NextcloudError, "NC_CA_BUNDLE does not exist"):
+                _default_ca_bundle()
+
+    def test_tls_error_names_the_bundle_that_was_used(self):
         client, _ = self.make_client(
             [requests.exceptions.SSLError("certificate verify failed")]
         )
+        client.session.verify = "/etc/ssl/cert.pem"
 
-        with self.assertRaisesRegex(NextcloudError, "configure NC_CA_BUNDLE"):
+        with self.assertRaisesRegex(NextcloudError, "/etc/ssl/cert.pem"):
             client.discover_calendars()
 
     def test_parser_ignores_valarm_fields(self):

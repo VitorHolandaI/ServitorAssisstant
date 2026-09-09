@@ -103,9 +103,12 @@ class NextcloudTasksClient:
             response.raise_for_status()
             return response.content
         except requests.exceptions.SSLError as error:
+            # Name the bundle that was actually used. The usual cause is a
+            # private CA that this host does not trust, and knowing which
+            # store was consulted is the difference between a guess and a fix.
             raise NextcloudError(
-                "Nextcloud TLS verification failed; configure NC_CA_BUNDLE or "
-                "set NC_TLS_VERIFY=false for a trusted private network"
+                f"Nextcloud TLS verification failed against {self.session.verify}; "
+                "point NC_CA_BUNDLE at the CA that signed the certificate"
             ) from error
         except requests.HTTPError as error:
             status = error.response.status_code if error.response is not None else "unknown"
@@ -1315,12 +1318,18 @@ def _unfold_ical(text: str) -> list[str]:
 
 
 def _default_ca_bundle() -> bool | str:
-    return (
-        os.getenv("NC_CA_BUNDLE")
-        or os.getenv("REQUESTS_CA_BUNDLE")
-        or ssl.get_default_verify_paths().cafile
-        or True
-    )
+    # A configured bundle is written by a human into .env, so it may well carry
+    # a "~". requests hands the string straight to OpenSSL, which does not
+    # expand it and raises a bare OSError that _request does not catch.
+    for name in ("NC_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
+        configured = (os.getenv(name) or "").strip()
+        if not configured:
+            continue
+        path = Path(configured).expanduser()
+        if not path.is_file():
+            raise NextcloudError(f"{name} does not exist: {path}")
+        return str(path)
+    return ssl.get_default_verify_paths().cafile or True
 
 
 def _parse_ical_components(text: str, component_name: str) -> list[dict]:

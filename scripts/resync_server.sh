@@ -52,6 +52,10 @@ fi
 copy_secret "${ROOT_DIR}/.env"            "${REMOTE_PATH}/.env"          600
 copy_secret "${CONFIG_DIR}/ha-token"      "${CONFIG_DIR}/ha-token"       600
 copy_secret "${CONFIG_DIR}/ha-root-ca.crt" "${CONFIG_DIR}/ha-root-ca.crt" 644
+# nextcloud.home is signed by the home mkcert CA. That CA sits in the trust
+# store of the laptop but not of the server, so Nextcloud calls there fail
+# verification unless the CA travels with the deployment.
+copy_secret "${CONFIG_DIR}/home-root-ca.crt" "${CONFIG_DIR}/home-root-ca.crt" 644
 
 echo "[resync] done. Restart the service to pick it up:"
 echo "         ssh $REMOTE 'systemctl --user restart <servitor-unit>'"
