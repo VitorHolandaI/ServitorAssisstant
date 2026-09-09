@@ -169,11 +169,12 @@ browser --HTTPS--> proxy manager (.11) --HTTPS--> 10.66.66.16:8443 --> nginx
 On the machine that holds the CA -- the certificate says which, under `OU=`:
 
 ```bash
-mkcert ai.home 10.66.66.11 10.66.66.16
+mkcert ai.home 10.66.66.16
 ```
 
-Both addresses go in the SAN so the proxy can dial either end by number without
-needing `proxy_ssl_name`. A certificate without a `subjectAltName` is refused by
+The address goes in the SAN because that is what the proxy manager dials; the
+name is there for the browser. A client checks the SAN against what it dialled,
+so without the address the proxy would need `proxy_ssl_name ai.home` instead. A certificate without a `subjectAltName` is refused by
 every current client, whatever the CN says.
 
 ### 2. Place the files
