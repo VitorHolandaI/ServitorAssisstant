@@ -1,7 +1,27 @@
+# The headless half of the Servitor. servitor_local_notebook/ is deliberately
+# absent: microphone, iGPU, MPRIS and the focused window do not containerise.
+#
+# Certificates and the Home Assistant token live outside the repository, in
+# ~/.config/servitor on the host, and are mounted read-only at /etc/servitor.
+# The paths handed to the app must be the ones inside the container: "~" is
+# expanded against the container's HOME, which is not yours.
+
+x-servitor-config: &servitor-config
+  # One model name for the puller and the caller. They used to disagree, so the
+  # entrypoint pulled lfm2.5-thinking and the backend asked for gemma4.
+  OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:e2b-it-qat}
+  OLLAMA_HOST: http://ollama:11434
+  SERVITOR_LLM_BACKEND: ollama
+  NC_CA_BUNDLE: /etc/servitor/home-root-ca.crt
+  HOME_ASSISTANT_CA_BUNDLE: /etc/servitor/ha-root-ca.crt
+  HOME_ASSISTANT_TOKEN_FILE: /etc/servitor/ha-token
+
 services:
 
   ollama:
     image: ollama/ollama
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma4:e2b-it-qat}
     volumes:
       - ollama-data:/root/.ollama
       - ./docker/ollama-entrypoint.sh:/entrypoint.sh:ro
@@ -18,11 +38,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: python -m mcp_module.stremable_http.stream2
+    # All three servers that need nothing but a network, in one process:
+    # general on 8001, dev-activity on 8002, Nextcloud on 8003.
+    command: python -m mcp_module.host
     env_file:
       - .env
+    environment:
+      <<: *servitor-config
     volumes:
       - app-data:/app/data
+      - ${SERVITOR_CONFIG_DIR:-~/.config/servitor}:/etc/servitor:ro
     restart: unless-stopped
 
   backend:
@@ -35,22 +60,34 @@ services:
         condition: service_started
       ollama:
         condition: service_healthy
+    env_file:
+      - .env
     environment:
-      SERVER_IP: mcp
-      OLLAMA_HOST: http://ollama:11434
+      <<: *servitor-config
+      # 127.0.0.1 in .env means this container, where nothing listens. The MCP
+      # servers answer on the compose network, under the service name.
+      MCP_ADDRESS: http://mcp:8001/mcp
+      MCP_EXTRA_ADDRESSES: http://mcp:8002/mcp,http://mcp:8003/mcp
+      # The deployment gets every tool; the spoken subset is the laptop's.
+      # Not ${MCP_PROFILE:-full}: compose interpolates from the same .env that
+      # env_file reads, so the laptop's MCP_PROFILE=local won the default.
+      MCP_PROFILE: full
       VOICE_PATH: /app/voice_models/en_US-ryan-medium.onnx
       CLIENT_IP: ${CLIENT_IP:-192.168.0.22}
     volumes:
       - app-data:/app/data
       - ./voice_models:/app/voice_models:ro
+      - ${SERVITOR_CONFIG_DIR:-~/.config/servitor}:/etc/servitor:ro
     restart: unless-stopped
 
   nginx:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+    # The only port on the wire. Point the proxy manager here instead of at the
+    # Vite dev server on 5173, and the API stops being reachable on its own.
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "${HTTP_PORT:-8080}:80"
     depends_on:
       - backend
     restart: unless-stopped
