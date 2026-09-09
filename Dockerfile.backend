@@ -20,4 +20,18 @@ COPY api/ ./api/
 
 ENV PYTHONPATH=/app/api
 
+# Run as a normal user. uid 1000 matches the host account that owns the bind
+# mounts, so voice_models and the certificates stay readable without loosening
+# anything on the host.
+#
+# /app/data has to exist and be owned here, before the volume is attached: a
+# named volume mounted over a path that exists in the image inherits that
+# path's contents and ownership on first use. Created empty by the daemon
+# instead, it would belong to root and the application could not write to it.
+RUN useradd --uid 1000 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
+
+USER app
+
 WORKDIR /app/api

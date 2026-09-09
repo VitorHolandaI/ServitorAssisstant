@@ -243,4 +243,5 @@ manager can do that natively; `.home` can never have one.
 | Nextcloud TLS verification failed against `<path>` | That bundle is not the CA that signed `NC_URL` |
 | `cannot load certificate key ... Permission denied` | The key is `0600` owned by your user. `nginx:alpine` reads it as root; an unprivileged image cannot |
 | Redirects come back as `http://` on an HTTPS page | `--forwarded-allow-ips` is missing, so uvicorn ignored `X-Forwarded-Proto` |
+| `Permission denied` writing `/app/data` on an existing volume | The volume predates the non-root user and belongs to root. `docker compose down -v`, or `docker run --rm -v <volume>:/d alpine chown -R 1000:1000 /d` |
 | 404 after refreshing a sub-page | `try_files ... /index.html` missing: a SPA serves every route from one document |
