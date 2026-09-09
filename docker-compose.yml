@@ -88,6 +88,11 @@ services:
     # Vite dev server on 5173, and the API stops being reachable on its own.
     ports:
       - "${HTTP_PORT:-8080}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      # The certificate this stack presents to the proxy manager, and the CA
+      # that would verify the proxy's own certificate under mTLS.
+      - ${SERVITOR_CONFIG_DIR:-~/.config/servitor}:/etc/servitor:ro
     depends_on:
       - backend
     restart: unless-stopped
