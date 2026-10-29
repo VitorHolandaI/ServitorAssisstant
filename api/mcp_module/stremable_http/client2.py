@@ -165,7 +165,10 @@ class llm_mcp_client:
                 keep_alive="10m",
                 timeout=120,
                 num_ctx=self.context_window,
-                model_kwargs={"think": False},
+                # ChatOllama drops unknown constructor kwargs, so
+                # model_kwargs={"think": False} never reached Ollama;
+                # `reasoning` is the field that maps to it.
+                reasoning=False,
             )
         self._usage_turn_open = False
         self._tools_by_name = {}

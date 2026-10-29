@@ -14,7 +14,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from mcp_module.stremable_http.client2 import _resolve_backend  # noqa: E402
+from mcp_module.stremable_http.client2 import (  # noqa: E402
+    _resolve_backend,
+    llm_mcp_client,
+)
 from server import tokens  # noqa: E402
 
 
@@ -49,6 +52,24 @@ class OllamaHostTest(unittest.TestCase):
     def test_host_falls_back_to_localhost(self):
         with patch.dict(os.environ, {}, clear=True):
             self.assertEqual(tokens._ollama_host(), "http://127.0.0.1:11434")
+
+
+class OllamaThinkingTest(unittest.TestCase):
+    def test_thinking_is_off_in_the_request_ollama_receives(self):
+        # model_kwargs={"think": False} passed silently: ChatOllama
+        # ignores unknown kwargs, and gemma4 thought on every turn.
+        from langchain_core.messages import HumanMessage
+
+        with patch.dict(os.environ, {}, clear=True):
+            agent = llm_mcp_client(
+                mcp_addresses=[],
+                model_name="gemma4:e2b-it-qat",
+                model_address="http://127.0.0.1:11434",
+                system_prompt="",
+                backend="ollama",
+            )
+        params = agent._llm._chat_params([HumanMessage("oi")])
+        self.assertIs(params["think"], False)
 
 
 if __name__ == "__main__":
