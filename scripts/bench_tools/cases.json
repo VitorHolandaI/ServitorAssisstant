@@ -1,0 +1,142 @@
+{
+  "comment": "Spoken Portuguese, the way the assistant is actually used. `accept` lists the tool names that count as correct; null means the model should call nothing. `args_contain` is checked as a subset, `args_absent` catches invented arguments. The SQLite task tools are registered under *_local_task names and their descriptions forbid use unless the user says 'local', so they never count as correct here. The :8003 slim server offers a second, lighter Nextcloud API; both it and the stream2 one count as correct.",
+  "cases": [
+    {
+      "id": "clima_hoje",
+      "prompt": "como está o tempo agora?",
+      "accept": [
+        "get_forecast"
+      ],
+      "args_absent": [
+        "latitude",
+        "longitude"
+      ],
+      "why": "The default location is already in the schema. Passing coordinates means the model invented them."
+    },
+    {
+      "id": "clima_semana",
+      "prompt": "como vai ser o tempo essa semana?",
+      "accept": [
+        "get_weekly_forecast"
+      ],
+      "why": "Daily vs weekly is the cheapest test of reading a description to the end."
+    },
+    {
+      "id": "clima_outra_cidade",
+      "prompt": "qual a previsão do tempo em Tóquio?",
+      "accept": [
+        "get_forecast",
+        "get_weekly_forecast"
+      ],
+      "args_required": [
+        "latitude",
+        "longitude"
+      ],
+      "why": "The opposite case: here coordinates are mandatory, and the model has to know Tokyo's."
+    },
+    {
+      "id": "tarefas_listar",
+      "prompt": "quais são as minhas tarefas?",
+      "accept": [
+        "list_nextcloud_tasks",
+        "nextcloud_pending_tasks"
+      ],
+      "why": "The local SQLite twin `list_local_tasks` says to use it only when asked for local tasks. Picking it is the failure being measured."
+    },
+    {
+      "id": "tarefa_criar",
+      "prompt": "cria uma tarefa pra comprar pão amanhã às 9 da manhã",
+      "accept": [
+        "create_nextcloud_task",
+        "nextcloud_add_task"
+      ],
+      "args_required": [
+        "title"
+      ],
+      "why": "Argument extraction from loose speech, plus not falling into `create_local_task`."
+    },
+    {
+      "id": "agenda_hoje",
+      "prompt": "o que eu tenho na agenda hoje?",
+      "accept": [
+        "list_nextcloud_events",
+        "nextcloud_today"
+      ],
+      "why": "Agenda and tasks are different tools and the words are close."
+    },
+    {
+      "id": "energia_agora",
+      "prompt": "quanto de energia eu estou gastando agora?",
+      "accept": [
+        "get_home_assistant_energy_state"
+      ],
+      "why": "Three energy tools differ only by description; state is the one with no arguments."
+    },
+    {
+      "id": "tarefa_concluir",
+      "prompt": "marca a tarefa de comprar pão como concluída",
+      "accept": [
+        "complete_nextcloud_task",
+        "nextcloud_finish_task"
+      ],
+      "args_required": [
+        "task"
+      ],
+      "why": "Has to pass the title through instead of asking for a UID, and not hit `complete_local_task`."
+    },
+    {
+      "id": "wol_proxmox",
+      "prompt": "liga o servidor proxmox",
+      "accept": [
+        "wake_on_lan_proxmox"
+      ],
+      "why": "DIAGNOSTIC: both wake tools carry the same docstring, so only the name can disambiguate."
+    },
+    {
+      "id": "wol_gpu",
+      "prompt": "liga a máquina da GPU",
+      "accept": [
+        "wake_on_lan_gpu"
+      ],
+      "why": "DIAGNOSTIC: same as above, from the other side."
+    },
+    {
+      "id": "aritmetica",
+      "prompt": "quanto é 47 vezes 13?",
+      "accept": [
+        "multiply_numbers"
+      ],
+      "args_required": [
+        "a",
+        "b"
+      ],
+      "why": "Numbers have to survive the trip into the arguments."
+    },
+    {
+      "id": "tarefa_apagar",
+      "prompt": "apaga a tarefa do dentista",
+      "accept": [
+        "delete_nextcloud_task"
+      ],
+      "why": "A destructive tool should still be reached when it is what was asked — but the Nextcloud one, not the SQLite one."
+    },
+    {
+      "id": "restraint_saudacao",
+      "prompt": "bom dia, tudo bem com você?",
+      "accept": [
+        null,
+        "default_response"
+      ],
+      "why": "Restraint. A greeting is not a tool call."
+    },
+    {
+      "id": "restraint_conhecimento",
+      "prompt": "quem escreveu Dom Casmurro?",
+      "accept": [
+        null,
+        "default_response"
+      ],
+      "why": "Restraint under keyword pressure: no tool answers this, and guessing one is the common failure."
+    }
+  ]
+}
