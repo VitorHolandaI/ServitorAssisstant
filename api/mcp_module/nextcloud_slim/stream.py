@@ -16,11 +16,14 @@ that is wanted, and it crowds a small model's context.
 """
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import re
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import dateparser
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp_module.stremable_http.nextcloud_tasks import (
@@ -46,7 +49,86 @@ mcp = FastMCP("NextcloudSlim", host=MCP_HOST, port=MCP_PORT, stateless_http=True
 # One spoken answer's worth. Past this the reply stops being listenable.
 SPOKEN_LIMIT = 6
 
+ISO_DUE = "%Y-%m-%d %H:%M:%S"
+ISO_EXEMPLO = "2026-08-05 18:00:00"
+
+# dateparser 1.1.8 ignora o "às" do português: "às 9" vira o dia 9 do mês, e
+# em "amanhã às 9" a hora some. "às 9" é como se fala, então normalizamos
+# para "09:00" antes de entregar o texto a ele.
+HORA_PT = re.compile(
+    r"\b[àa]s\s+(\d{1,2})(?:\s*[h:]\s*(\d{2}))?(?:\s*(?:da|de)\s+"
+    r"(manh[ãa]|tarde|noite))?",
+    re.IGNORECASE,
+)
+PERIODO_TARDIO = ("tarde", "noite")
+
 _client: NextcloudTasksClient | None = None
+
+
+def _timezone() -> ZoneInfo:
+    name = os.getenv("NC_TIMEZONE", "America/Recife")
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as error:
+        raise NextcloudError(f"NC_TIMEZONE inválido: {name!r}") from error
+
+
+def _normalizar_hora_pt(texto: str) -> str:
+    """Troca "às 9", "às 9h30", "às 9 da noite" por um horário que o parser lê."""
+
+    def trocar(encontro: re.Match[str]) -> str:
+        hora = int(encontro.group(1))
+        minuto = encontro.group(2) or "00"
+        periodo = (encontro.group(3) or "").lower()
+        if periodo.startswith(PERIODO_TARDIO) and hora < 12:
+            hora += 12
+        return f"{hora:02d}:{minuto}"
+
+    return HORA_PT.sub(trocar, texto)
+
+
+def _to_iso_due(
+    value: str,
+    reference: datetime.datetime | None = None,
+    timezone: ZoneInfo | None = None,
+) -> str:
+    """Traduz um prazo falado para o formato que o cliente CalDAV exige.
+
+    O cliente aceita só `%Y-%m-%d %H:%M:%S`; esta tool promete linguagem
+    natural ao modelo. Aqui é onde as duas coisas se encontram.
+
+    >>> _to_iso_due("amanhã às 9")  # doctest: +SKIP
+    '2026-10-30 09:00:00'
+    """
+    texto = (value or "").strip()
+    if not texto:
+        raise NextcloudError(
+            f"due_at vazio, esperado 'amanhã às 9' ou '{ISO_EXEMPLO}'"
+        )
+    for formato in (ISO_DUE, "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.datetime.strptime(texto, formato).strftime(ISO_DUE)
+        except ValueError:
+            continue
+    tz = timezone or _timezone()
+    base = reference or datetime.datetime.now(tz)
+    parsed = dateparser.parse(
+        _normalizar_hora_pt(texto),
+        languages=["pt", "en"],
+        settings={
+            # Sem isto "às 9" vira hoje de manhã, que já passou: um prazo no
+            # passado é recusado mais adiante por create_task.
+            "PREFER_DATES_FROM": "future",
+            "RELATIVE_BASE": base.replace(tzinfo=None),
+            "RETURN_AS_TIMEZONE_AWARE": False,
+        },
+    )
+    if parsed is None:
+        raise NextcloudError(
+            f"não entendi a data {texto!r}; use algo como 'amanhã às 9' "
+            f"ou o formato exato {ISO_EXEMPLO}"
+        )
+    return parsed.strftime(ISO_DUE)
 
 
 def _nextcloud() -> NextcloudTasksClient:
@@ -104,7 +186,7 @@ async def nextcloud_pending_tasks(limit: int = SPOKEN_LIMIT) -> str:
 async def nextcloud_add_task(title: str, due_at: str) -> str:
     """Add a task. `due_at` is natural language, e.g. 'tomorrow at 6 pm'."""
     try:
-        return _nextcloud().create_task(title=title, due_at=due_at)
+        return _nextcloud().create_task(title=title, due_at=_to_iso_due(due_at))
     except NextcloudError as error:
         return f"Could not create the Nextcloud task: {error}"
 
