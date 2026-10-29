@@ -116,9 +116,11 @@ RSYNC_ARGS=(
     --exclude=*.pem
     --exclude=*.key
     --exclude=melhor.txt
-    --exclude=voice_models/*.onnx
-    --exclude=voice_models/*.onnx.json
-    --exclude=voice_models/*.onnx.json.*
+    # Modelos sao baixados por maquina (scripts/download_ear_models.sh), nao
+    # sao fonte. Sincronizar a pasta inteira com --delete apagaria do servidor
+    # os modelos OpenVINO do ear, que nao existem no laptop: 7,8 GB e o
+    # qwen3-4b-int4-ov que o EAR_LLM_MODEL aponta.
+    --exclude=voice_models/
     --exclude=stt_experiments/samples/
     --exclude=stt_experiments/voice_models/
 )
